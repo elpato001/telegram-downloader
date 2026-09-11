@@ -1146,7 +1146,6 @@ selectAll.addEventListener('change', (e) => {
 });
 
 // 4.1 Selector de carpeta de destino y persistencia
-const customDirInput = document.getElementById('customDir');
 const btnBrowseDir = document.getElementById('btnBrowseDir');
 
 const savedDir = localStorage.getItem('telegram_download_dir');
