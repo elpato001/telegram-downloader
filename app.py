@@ -538,10 +538,25 @@ class QRLoginManager:
                 "expires": self.expires
             }
         except Exception as e:
-            self.status = "error"
-            self.error = traducir_error_telegram(e)
-            logger.error(f"Error iniciando login QR: {e}")
-            return {"success": False, "error": self.error}
+            logger.warning(f"Error en primer intento de QR: {e}. Reconectando cliente de Telegram...")
+            try:
+                if client.is_connected():
+                    await client.disconnect()
+                await client.connect()
+                self.qr_obj = await client.qr_login()
+                self.token_url = self.qr_obj.url
+                self.expires = self.qr_obj.expires.isoformat() if getattr(self.qr_obj, 'expires', None) else None
+                self.wait_task = asyncio.create_task(self._wait_loop())
+                return {
+                    "success": True,
+                    "token_url": self.token_url,
+                    "expires": self.expires
+                }
+            except Exception as e2:
+                self.status = "error"
+                self.error = traducir_error_telegram(e2)
+                logger.error(f"Error iniciando login QR: {e2}")
+                return {"success": False, "error": self.error}
 
     async def _wait_loop(self):
         while self.status == "waiting":

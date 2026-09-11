@@ -226,14 +226,21 @@ function onQrTokenReceived(tokenUrl, expires) {
     const canvasEl = document.getElementById('qrCanvas');
     if (canvasEl && typeof QRCode !== 'undefined') {
         canvasEl.innerHTML = '';
-        qrCodeInstance = new QRCode(canvasEl, {
-            text: tokenUrl,
-            width: 220,
-            height: 220,
-            colorDark: "#000000",
-            colorLight: "#ffffff",
-            correctLevel: QRCode.CorrectLevel.H
-        });
+        try {
+            qrCodeInstance = new QRCode(canvasEl, {
+                text: tokenUrl,
+                width: 220,
+                height: 220,
+                colorDark: "#000000",
+                colorLight: "#ffffff",
+                correctLevel: QRCode.CorrectLevel.M
+            });
+        } catch (e) {
+            console.error("Error al renderizar código QR:", e);
+            onQrError("Error al generar imagen de código QR: " + (e.message || e));
+        }
+    } else {
+        onQrError("Librería de código QR no disponible en el navegador.");
     }
 }
 
