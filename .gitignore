@@ -1,0 +1,40 @@
+# Sesiones y credenciales de Telegram (¡Privado! NO subir a GitHub)
+*.session
+*.session-journal
+mi_sesion.session
+
+# Carpeta de descargas
+descargas/
+downloads/
+
+# Base de datos local
+*.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# Entorno / Variables locales
+.env
+.env.local
+
+# IDEs
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Sistema operativo
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Carpeta duplicada local
+telegram downloader/
