@@ -37,6 +37,8 @@ client = TelegramClient(
 
 # Almacenar los videos escaneados temporalmente en memoria para poder descargarlos
 current_videos_cache = []
+# Caché de mensajes de Telethon indexados por (str(entity_id), message_id)
+messages_cache = {}
 
 # Websocket manager para enviar el progreso
 class ConnectionManager:
@@ -191,26 +193,82 @@ def formatear_nombre_con_fecha(filename: str, fecha_iso: str) -> str:
     else:
         return f"{filename} ({fecha_str})"
 
+def clean_filename_for_pack(fname: str) -> str:
+    s = re.sub(r'(?i)\.(part\d+|z\d+|7z\.\d+|\d{3})\.(rar|zip|7z|tar|gz)$', '', fname)
+    s = re.sub(r'(?i)\.part\d+\.rar$', '', s)
+    s = re.sub(r'(?i)\.(rar|zip|7z|tar|gz|mp4|mkv|avi|mov|iso|bin|cue|chd|cso|exe|pdf)$', '', s)
+    s = re.sub(r'(?i)[._ -]part\d+$', '', s)
+    s = re.sub(r'(?i)\.z\d+$', '', s)
+    return s.strip()
+
+def detect_container_name(filenames: list[str], fallback: str = "Descargas") -> str:
+    """Detecta el nombre de la carpeta contenedora para un paquete a partir de sus archivos."""
+    if not filenames:
+        return fallback
+    cleaned = [clean_filename_for_pack(f) for f in filenames if f]
+    if not cleaned:
+        return fallback
+    if len(cleaned) == 1:
+        return cleaned[0] or fallback
+    prefix = os.path.commonprefix(cleaned).strip()
+    prefix = re.sub(r'[\s._-]+$', '', prefix)
+    if len(prefix) >= 3:
+        return prefix
+    return cleaned[0] or fallback
+
 class QRPasswordAuth(BaseModel):
     password: str
 
 class ScanLink(BaseModel):
     link: str
+    custom_dir: str = ""
+
+class DownloadItemPayload(BaseModel):
+    message_id: int
+    entity_id: str = ""
+    filename: str = ""
+    total_size: int = 0
+    fecha: str = ""
+    custom_dir: str = ""
+    package_name: str = "Descargas"
+    channel_name: str = ""
+    grabber_item_id: int | None = None
 
 class DownloadRequest(BaseModel):
-    indices: list[int]
+    indices: list[int] = []
+    items: list[DownloadItemPayload] = []
     custom_dir: str = ""
     is_resume: bool = False
     include_date: bool = False
+    remove_from_grabber: bool = True
 
 class DownloadControlRequest(BaseModel):
     index: int | str = "all"
 
+class GrabberDeleteRequest(BaseModel):
+    package_ids: list[int] = []
+    item_ids: list[int] = []
+
+class GrabberDirRequest(BaseModel):
+    package_id: int
+    custom_dir: str
+
+class GrabberRenameRequest(BaseModel):
+    package_id: int
+    name: str
+
+class DeleteDownloadsRequest(BaseModel):
+    db_ids: list[int] = []
+    package_names: list[str] = []
+
 class DownloadItem:
-    def __init__(self, original_idx: int, filename: str, total_size: int):
+    def __init__(self, original_idx: int, filename: str, total_size: int, package_name: str = "Descargas", fecha: str = "", channel_name: str = ""):
         self.original_idx = original_idx
         self.filename = filename
         self.total_size = total_size
+        self.package_name = package_name or "Descargas"
+        self.channel_name = channel_name or ""
+        self.fecha = fecha
         self.state = "pending"  # "pending", "downloading", "paused", "stopped", "done", "error"
         self.pause_event = asyncio.Event()
         self.pause_event.set()
@@ -367,6 +425,8 @@ async def get_history():
     history = database.get_all_downloads()
     formatted = []
     for h in history:
+        pkg_name = h.get("package_name") or "Descargas"
+        channel_name = h.get("channel_name") or ""
         formatted.append({
             "db_id": h["id"],
             "id": h["message_id"],
@@ -376,19 +436,88 @@ async def get_history():
             "tamanio_fmt": formatear_tamanio(h["total_size"]),
             "state": h["state"],
             "downloaded_bytes": h["downloaded_bytes"],
-            "file_path": h["file_path"] or ""
+            "file_path": h["file_path"] or "",
+            "package_name": pkg_name,
+            "channel_name": channel_name,
+            "fecha": h.get("fecha") or "",
+            "custom_dir": h.get("custom_dir") or ""
         })
         # Registrar en el DownloadManager si no existe
         if h["id"] not in download_mgr.items:
-            item = DownloadItem(-1, h["filename"], h["total_size"])
+            item = DownloadItem(h["id"], h["filename"], h["total_size"], pkg_name, h.get("fecha") or "", channel_name)
             item.db_id = h["id"]
             item.state = h["state"]
             item.downloaded_bytes = h["downloaded_bytes"]
             item.file_path = h["file_path"] or ""
             item.message_id = h["message_id"]
             item.entity_id = h["entity_id"]
+            item.custom_dir = h.get("custom_dir", "")
             download_mgr.items[h["id"]] = item
     return {"success": True, "history": formatted}
+
+@app.post("/api/downloads/delete")
+async def delete_downloads(data: DeleteDownloadsRequest):
+    if data.db_ids:
+        for db_id in data.db_ids:
+            if db_id in download_mgr.items:
+                download_mgr.items[db_id].cancelled = True
+                download_mgr.items[db_id].pause_event.set()
+                download_mgr.items.pop(db_id, None)
+        database.delete_downloads_batch(data.db_ids)
+    if data.package_names:
+        for pkg in data.package_names:
+            to_remove = [k for k, v in download_mgr.items.items() if getattr(v, 'package_name', '') == pkg]
+            for k in to_remove:
+                download_mgr.items[k].cancelled = True
+                download_mgr.items[k].pause_event.set()
+                download_mgr.items.pop(k, None)
+            database.delete_package_downloads(pkg)
+    return {"success": True}
+
+@app.post("/api/downloads/clear_completed")
+async def clear_completed_downloads():
+    to_remove = [k for k, v in download_mgr.items.items() if v.state == 'done']
+    for k in to_remove:
+        download_mgr.items.pop(k, None)
+    database.clear_completed_downloads()
+    return {"success": True}
+
+# --- Rutas del Capturador de Enlaces (Link Grabber) ---
+@app.get("/api/grabber")
+async def get_grabber():
+    packages = database.get_all_grabber()
+    for p in packages:
+        total_size = sum(item.get("total_size", 0) for item in p.get("items", []))
+        p["total_size"] = total_size
+        p["total_size_fmt"] = formatear_tamanio(total_size)
+        for item in p.get("items", []):
+            item["tamanio_fmt"] = formatear_tamanio(item.get("total_size", 0))
+            item["carpeta"] = p["name"]
+    return {"success": True, "packages": packages}
+
+@app.post("/api/grabber/delete")
+async def delete_grabber(data: GrabberDeleteRequest):
+    if data.package_ids:
+        for pid in data.package_ids:
+            database.delete_grabber_package(pid)
+    if data.item_ids:
+        database.delete_grabber_items(data.item_ids)
+    return {"success": True}
+
+@app.post("/api/grabber/clear")
+async def clear_grabber():
+    database.clear_grabber()
+    return {"success": True}
+
+@app.post("/api/grabber/update_dir")
+async def update_grabber_dir(data: GrabberDirRequest):
+    database.update_grabber_package_dir(data.package_id, data.custom_dir)
+    return {"success": True}
+
+@app.post("/api/grabber/rename")
+async def rename_grabber_pkg(data: GrabberRenameRequest):
+    database.rename_grabber_package(data.package_id, data.name)
+    return {"success": True}
 
 @app.get("/api/status")
 async def status():
@@ -891,41 +1020,125 @@ async def scan_channel(data: ScanLink):
     except Exception as e:
         return {"success": False, "error": traducir_error_telegram(e)}
 
+    # Cachear los objetos message de telethon
+    for v in videos:
+        messages_cache[(str(entity.id), v["id"])] = v["message"]
+
     # Guardar en memoria para cuando pidan descargar
     current_videos_cache = videos
+
+    # Detectar el nombre de la carpeta contenedora para el paquete
+    filenames = [v["nombre"] for v in videos]
+    container_name = detect_container_name(filenames, fallback=chat_name)
+
+    # Guardar en base de datos en el Capturador de Enlaces
+    pkg_id = database.add_grabber_package(
+        name=container_name, 
+        entity_id=str(entity.id), 
+        custom_dir=data.custom_dir,
+        channel_name=chat_name
+    )
+    database.add_grabber_items(pkg_id, videos)
+
+    # Obtener lista actualizada de paquetes del capturador
+    packages = database.get_all_grabber()
+    for p in packages:
+        total_size = sum(item.get("total_size", 0) for item in p.get("items", []))
+        p["total_size"] = total_size
+        p["total_size_fmt"] = formatear_tamanio(total_size)
+        p_chan = p.get("channel_name") or chat_name
+        p["channel_name"] = p_chan
+        for item in p.get("items", []):
+            item["tamanio_fmt"] = formatear_tamanio(item.get("total_size", 0))
+            item["carpeta"] = p["name"]
+            item["channel_name"] = p_chan
     
     # Preparar respuesta sin el objeto de telethon
-    response_videos = [{"original_idx": i, "id": v["id"], "nombre": v["nombre"], "tamanio": v["tamanio"], "tamanio_fmt": v["tamanio_fmt"], "fecha": v.get("fecha", "")} for i, v in enumerate(videos)]
-    return {"success": True, "videos": response_videos}
+    response_videos = [{"original_idx": i, "id": v["id"], "nombre": v["nombre"], "tamanio": v["tamanio"], "tamanio_fmt": v["tamanio_fmt"], "fecha": v.get("fecha", ""), "carpeta": container_name, "channel_name": chat_name} for i, v in enumerate(videos)]
+    return {
+        "success": True, 
+        "package_id": pkg_id, 
+        "package_name": container_name,
+        "channel_name": chat_name,
+        "videos": response_videos,
+        "packages": packages
+    }
 
 
 @app.post("/api/download")
 async def trigger_download(data: DownloadRequest):
     if not data.is_resume:
         db_ids = []
-        for idx in data.indices:
-            video = current_videos_cache[idx]
-            filename = video["nombre"]
-            if data.include_date and video.get("fecha"):
-                filename = formatear_nombre_con_fecha(filename, video["fecha"])
+        grabber_ids_to_remove = []
 
-            db_id = database.add_download(
-                message_id=video["id"],
-                entity_id=video.get("entity_id", str(video.get("carpeta", ""))),
-                filename=filename,
-                total_size=video["tamanio"],
-                custom_dir=data.custom_dir,
-                file_path=""
-            )
-            item = DownloadItem(idx, filename, video["tamanio"])
-            item.db_id = db_id
-            item.message_id = video["id"]
-            item.entity_id = video.get("entity_id")
-            item.custom_dir = data.custom_dir
-            download_mgr.items[db_id] = item
-            db_ids.append(db_id)
-        
-        asyncio.create_task(process_downloads(db_ids, data.custom_dir))
+        if data.items:
+            # Viene de la selección del Capturador de Enlaces
+            for itm in data.items:
+                filename = itm.filename
+                if data.include_date and itm.fecha:
+                    filename = formatear_nombre_con_fecha(filename, itm.fecha)
+                
+                target_dir = itm.custom_dir.strip() or data.custom_dir.strip()
+                package_name = itm.package_name or "Descargas"
+                channel_name = getattr(itm, 'channel_name', '') or ""
+
+                db_id = database.add_download(
+                    message_id=itm.message_id,
+                    entity_id=itm.entity_id,
+                    filename=filename,
+                    total_size=itm.total_size,
+                    custom_dir=target_dir,
+                    file_path="",
+                    package_name=package_name,
+                    channel_name=channel_name,
+                    fecha=itm.fecha
+                )
+                item = DownloadItem(db_id, filename, itm.total_size, package_name, itm.fecha, channel_name)
+                item.db_id = db_id
+                item.message_id = itm.message_id
+                item.entity_id = itm.entity_id
+                item.custom_dir = target_dir
+                download_mgr.items[db_id] = item
+                db_ids.append(db_id)
+
+                if itm.grabber_item_id:
+                    grabber_ids_to_remove.append(itm.grabber_item_id)
+
+            if data.remove_from_grabber and grabber_ids_to_remove:
+                database.delete_grabber_items(grabber_ids_to_remove)
+
+        elif data.indices:
+            # Compatibilidad con índices directos de scan
+            for idx in data.indices:
+                if idx < len(current_videos_cache):
+                    video = current_videos_cache[idx]
+                    filename = video["nombre"]
+                    if data.include_date and video.get("fecha"):
+                        filename = formatear_nombre_con_fecha(filename, video["fecha"])
+
+                    package_name = video.get("carpeta") or "Descargas"
+                    channel_name = video.get("channel_name") or ""
+                    db_id = database.add_download(
+                        message_id=video["id"],
+                        entity_id=video.get("entity_id", str(video.get("carpeta", ""))),
+                        filename=filename,
+                        total_size=video["tamanio"],
+                        custom_dir=data.custom_dir,
+                        file_path="",
+                        package_name=package_name,
+                        channel_name=channel_name,
+                        fecha=video.get("fecha", "")
+                    )
+                    item = DownloadItem(db_id, filename, video["tamanio"], package_name, video.get("fecha", ""), channel_name)
+                    item.db_id = db_id
+                    item.message_id = video["id"]
+                    item.entity_id = video.get("entity_id")
+                    item.custom_dir = data.custom_dir
+                    download_mgr.items[db_id] = item
+                    db_ids.append(db_id)
+
+        if db_ids:
+            asyncio.create_task(process_downloads(db_ids, data.custom_dir))
         return {"success": True, "db_ids": db_ids}
     else:
         for db_id in data.indices:
@@ -934,7 +1147,8 @@ async def trigger_download(data: DownloadRequest):
                 download_mgr.items[db_id].cancelled = False
                 download_mgr.items[db_id].pause_event.set()
                 database.update_download_state(db_id, "pending")
-        asyncio.create_task(process_downloads(data.indices, data.custom_dir))
+        if data.indices:
+            asyncio.create_task(process_downloads(data.indices, data.custom_dir))
         return {"success": True}
 
 @app.post("/api/download/pause")
@@ -944,13 +1158,13 @@ async def pause_download(data: DownloadControlRequest):
         await manager.send_json({"type": "global_status", "state": "paused"})
         for idx in download_mgr.items:
             if download_mgr.items[idx].state == "paused":
-                await manager.send_json({"type": "status_change", "index": idx, "state": "paused", "speed_mbps": 0})
+                await manager.send_json({"type": "status_change", "index": idx, "db_id": idx, "state": "paused", "speed_mbps": 0})
     else:
         try:
             idx = int(data.index)
             download_mgr.pause_item(idx)
             database.update_download_state(idx, "paused")
-            await manager.send_json({"type": "status_change", "index": idx, "state": "paused", "speed_mbps": 0})
+            await manager.send_json({"type": "status_change", "index": idx, "db_id": idx, "state": "paused", "speed_mbps": 0})
         except ValueError:
             pass
     return {"success": True}
@@ -963,7 +1177,7 @@ async def resume_download(data: DownloadControlRequest):
         for idx in download_mgr.items:
             item = download_mgr.items[idx]
             if item.state in ("downloading", "pending"):
-                await manager.send_json({"type": "status_change", "index": idx, "state": item.state})
+                await manager.send_json({"type": "status_change", "index": idx, "db_id": idx, "state": item.state})
     else:
         try:
             idx = int(data.index)
@@ -971,7 +1185,7 @@ async def resume_download(data: DownloadControlRequest):
             state = download_mgr.items[idx].state if idx in download_mgr.items else "downloading"
             if state in ("downloading", "pending"):
                 database.update_download_state(idx, state)
-            await manager.send_json({"type": "status_change", "index": idx, "state": state})
+            await manager.send_json({"type": "status_change", "index": idx, "db_id": idx, "state": state})
         except ValueError:
             pass
     return {"success": True}
@@ -982,19 +1196,19 @@ async def stop_download(data: DownloadControlRequest):
         download_mgr.stop_all()
         await manager.send_json({"type": "global_status", "state": "stopped"})
         for idx in download_mgr.items:
-            await manager.send_json({"type": "status_change", "index": idx, "state": "stopped", "speed_mbps": 0})
+            await manager.send_json({"type": "status_change", "index": idx, "db_id": idx, "state": "stopped", "speed_mbps": 0})
     else:
         try:
             idx = int(data.index)
             download_mgr.stop_item(idx)
             database.update_download_state(idx, "stopped")
-            await manager.send_json({"type": "status_change", "index": idx, "state": "stopped", "speed_mbps": 0})
+            await manager.send_json({"type": "status_change", "index": idx, "db_id": idx, "state": "stopped", "speed_mbps": 0})
         except ValueError:
             pass
     return {"success": True}
 
 async def process_downloads(db_ids, custom_dir=""):
-    global current_videos_cache, download_mgr
+    global current_videos_cache, download_mgr, messages_cache
     
     base_dir = custom_dir.strip() if custom_dir.strip() else DOWNLOAD_DIR
     download_dir = Path(base_dir)
@@ -1008,12 +1222,12 @@ async def process_downloads(db_ids, custom_dir=""):
         if not item:
             continue
             
-        target_idx = item.original_idx if item.original_idx >= 0 else db_id
+        target_idx = db_id
 
         if download_mgr.global_cancelled or item.cancelled:
             item.state = "stopped"
             database.update_download_state(db_id, "stopped")
-            await manager.send_json({"type": "status_change", "index": target_idx, "state": "stopped"})
+            await manager.send_json({"type": "status_change", "index": target_idx, "db_id": db_id, "state": "stopped"})
             continue
 
         # Esperar si hay pausa global
@@ -1024,7 +1238,7 @@ async def process_downloads(db_ids, custom_dir=""):
         if download_mgr.global_cancelled or item.cancelled:
             item.state = "stopped"
             database.update_download_state(db_id, "stopped")
-            await manager.send_json({"type": "status_change", "index": target_idx, "state": "stopped"})
+            await manager.send_json({"type": "status_change", "index": target_idx, "db_id": db_id, "state": "stopped"})
             continue
 
         download_mgr.active_index = db_id
@@ -1033,14 +1247,14 @@ async def process_downloads(db_ids, custom_dir=""):
         
         nombre = item.filename
         tamanio = item.total_size
-        carpeta = "Descargas_Telegram"
         
-        # Obtener el mensaje de Telegram si no está en caché (por ejemplo si viene del historial)
-        msg_obj = None
-        for v in current_videos_cache:
-            if v["id"] == item.message_id:
-                msg_obj = v["message"]
-                break
+        # Obtener el mensaje de Telegram desde la caché en memoria
+        msg_obj = messages_cache.get((str(item.entity_id), item.message_id))
+        if not msg_obj:
+            for v in current_videos_cache:
+                if v["id"] == item.message_id:
+                    msg_obj = v.get("message")
+                    break
         
         if not msg_obj:
             try:
@@ -1053,28 +1267,40 @@ async def process_downloads(db_ids, custom_dir=""):
             except Exception as e:
                 item.state = "error"
                 database.update_download_state(db_id, "error")
-                await manager.send_json({"type": "error", "message": f"No se pudo acceder al mensaje en Telegram: {e}", "index": target_idx})
-                await manager.send_json({"type": "status_change", "index": target_idx, "state": "error"})
+                await manager.send_json({"type": "error", "message": f"No se pudo acceder al mensaje en Telegram: {e}", "index": target_idx, "db_id": db_id})
+                await manager.send_json({"type": "status_change", "index": target_idx, "db_id": db_id, "state": "error"})
                 continue
         
-        download_dir = Path(base_dir) / carpeta
+        canal = re.sub(r'[<>:"/\\|?*]', '', str(getattr(item, 'channel_name', '') or "")).strip()
+        carpeta = re.sub(r'[<>:"/\\|?*]', '', str(getattr(item, 'package_name', '') or "Descargas")).strip() or "Descargas"
+        dest_root = item.custom_dir.strip() if getattr(item, 'custom_dir', None) and item.custom_dir.strip() else base_dir
+        
+        if canal:
+            download_dir = Path(dest_root) / canal / carpeta
+        else:
+            download_dir = Path(dest_root) / carpeta
+
         download_dir.mkdir(parents=True, exist_ok=True)
         
         ruta_destino = download_dir / nombre
-        item.file_path = str(ruta_destino.resolve())
+        ruta_temp = download_dir / f"{nombre}.tdl"
+        item.file_path = str(ruta_temp.resolve())
         
         await manager.send_json({
             "type": "start",
             "current": i + 1,
             "total": len(db_ids),
             "filename": nombre,
-            "index": target_idx
+            "index": target_idx,
+            "db_id": db_id,
+            "package_name": item.package_name
         })
-        await manager.send_json({"type": "status_change", "index": target_idx, "state": "downloading"})
+        await manager.send_json({"type": "status_change", "index": target_idx, "db_id": db_id, "state": "downloading"})
 
         if ruta_destino.exists() and ruta_destino.stat().st_size == tamanio and tamanio > 0:
             item.state = "done"
             item.downloaded_bytes = tamanio
+            item.file_path = str(ruta_destino.resolve())
             database.update_download_state(db_id, "done")
             database.update_download_progress(db_id, tamanio, str(ruta_destino.resolve()))
             await manager.send_json({"type": "done", "index": target_idx, "file_path": str(ruta_destino.resolve())})
@@ -1083,8 +1309,8 @@ async def process_downloads(db_ids, custom_dir=""):
             
         try:
             CHUNK_SIZE = 1024 * 1024
-            if not ruta_destino.exists() or ruta_destino.stat().st_size != tamanio:
-                with open(ruta_destino, 'wb') as f:
+            if not ruta_temp.exists() or ruta_temp.stat().st_size != tamanio:
+                with open(ruta_temp, 'wb') as f:
                     if tamanio > 0:
                         f.seek(tamanio - 1)
                         f.write(b'\0')
@@ -1147,6 +1373,8 @@ async def process_downloads(db_ids, custom_dir=""):
                                 "total_size": tamanio,
                                 "speed_mbps": round(max(0, speed), 1),
                                 "index": target_idx,
+                                "db_id": db_id,
+                                "package_name": item.package_name,
                                 "state": item.state
                             })
                             last_time = current_time
@@ -1156,7 +1384,7 @@ async def process_downloads(db_ids, custom_dir=""):
                             break
                         
                     if not (download_mgr.global_cancelled or item.cancelled):
-                        with open(ruta_destino, 'r+b') as f:
+                        with open(ruta_temp, 'r+b') as f:
                             f.seek(offset)
                             f.write(chunk_data)
 
@@ -1170,21 +1398,26 @@ async def process_downloads(db_ids, custom_dir=""):
             if download_mgr.global_cancelled or item.cancelled:
                 item.state = "stopped"
                 database.update_download_state(db_id, "stopped")
-                database.update_download_progress(db_id, descargados_total, item.file_path)
+                database.update_download_progress(db_id, descargados_total, str(ruta_temp.resolve()))
                 await manager.send_json({
-                    "type": "progress", "downloaded": descargados_total, "total_size": tamanio, "speed_mbps": 0, "index": target_idx, "state": "stopped"
+                    "type": "progress", "downloaded": descargados_total, "total_size": tamanio, "speed_mbps": 0, "index": target_idx, "db_id": db_id, "package_name": item.package_name, "state": "stopped"
                 })
-                await manager.send_json({"type": "status_change", "index": target_idx, "state": "stopped"})
+                await manager.send_json({"type": "status_change", "index": target_idx, "db_id": db_id, "package_name": item.package_name, "state": "stopped"})
             else:
+                # Al completar el 100%, eliminar la extensión temporal .tdl (archivo.rar.tdl -> archivo.rar)
+                if ruta_temp.exists():
+                    os.replace(ruta_temp, ruta_destino)
+
                 item.state = "done"
                 item.downloaded_bytes = tamanio
+                item.file_path = str(ruta_destino.resolve())
                 database.update_download_state(db_id, "done")
-                database.update_download_progress(db_id, tamanio, item.file_path)
+                database.update_download_progress(db_id, tamanio, str(ruta_destino.resolve()))
                 await manager.send_json({
-                    "type": "progress", "downloaded": tamanio, "total_size": tamanio, "speed_mbps": 0, "index": target_idx, "state": "done"
+                    "type": "progress", "downloaded": tamanio, "total_size": tamanio, "speed_mbps": 0, "index": target_idx, "db_id": db_id, "package_name": item.package_name, "state": "done"
                 })
-                await manager.send_json({"type": "done", "index": target_idx, "file_path": item.file_path})
-                await manager.send_json({"type": "status_change", "index": target_idx, "state": "done", "file_path": item.file_path})
+                await manager.send_json({"type": "done", "index": target_idx, "db_id": db_id, "package_name": item.package_name, "file_path": str(ruta_destino.resolve())})
+                await manager.send_json({"type": "status_change", "index": target_idx, "db_id": db_id, "package_name": item.package_name, "state": "done", "file_path": str(ruta_destino.resolve())})
                 
         except (ConnectionError, OSError) as e:
             # Error de conexión — intentar reconectar y reportar
@@ -1195,13 +1428,13 @@ async def process_downloads(db_ids, custom_dir=""):
                 pass
             item.state = "error"
             database.update_download_state(db_id, "error")
-            await manager.send_json({"type": "error", "message": f"Error de conexión: {traducir_error_telegram(e)}. La sesión se reconectó automáticamente.", "index": target_idx})
-            await manager.send_json({"type": "status_change", "index": target_idx, "state": "error"})
+            await manager.send_json({"type": "error", "message": f"Error de conexión: {traducir_error_telegram(e)}. La sesión se reconectó automáticamente.", "index": target_idx, "db_id": db_id, "package_name": item.package_name})
+            await manager.send_json({"type": "status_change", "index": target_idx, "db_id": db_id, "package_name": item.package_name, "state": "error"})
         except Exception as e:
             item.state = "error"
             database.update_download_state(db_id, "error")
-            await manager.send_json({"type": "error", "message": traducir_error_telegram(e), "index": target_idx})
-            await manager.send_json({"type": "status_change", "index": target_idx, "state": "error"})
+            await manager.send_json({"type": "error", "message": traducir_error_telegram(e), "index": target_idx, "db_id": db_id, "package_name": item.package_name})
+            await manager.send_json({"type": "status_change", "index": target_idx, "db_id": db_id, "package_name": item.package_name, "state": "error"})
 
     download_mgr.is_running = False
     download_mgr.active_index = None

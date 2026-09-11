@@ -35,6 +35,123 @@ body {
     overflow: hidden;
 }
 
+/* App Header & JDownloader Tabs */
+.app-header {
+    background: linear-gradient(180deg, #f7f7f7 0%, #e5e5e5 100%);
+    border-bottom: 1px solid #b5b5b5;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    padding: 6px 12px 0 12px;
+    gap: 16px;
+    user-select: none;
+}
+
+.app-branding {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-bottom: 7px;
+}
+
+.app-logo-small {
+    width: 20px;
+    height: 20px;
+    border-radius: 4px;
+    object-fit: cover;
+}
+
+.app-title-text {
+    font-weight: 600;
+    font-size: 13px;
+    color: #333;
+    letter-spacing: -0.2px;
+}
+
+.jd-tabs-container {
+    display: flex;
+    align-items: flex-end;
+    gap: 3px;
+    flex: 1;
+    overflow-x: auto;
+}
+
+.jd-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 7px 16px;
+    border: 1px solid #bfbfbf;
+    border-bottom: none;
+    border-radius: 5px 5px 0 0;
+    background: linear-gradient(180deg, #eaeaea 0%, #d8d8d8 100%);
+    color: #444;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    position: relative;
+    top: 1px;
+    transition: all 0.12s ease-in-out;
+}
+
+.jd-tab:hover {
+    background: linear-gradient(180deg, #f4f4f4 0%, #e2e2e2 100%);
+    color: #111;
+}
+
+.jd-tab.active {
+    background: #ffffff;
+    color: #111;
+    font-weight: 600;
+    border-color: #a0a0a0;
+    border-bottom: 1px solid #ffffff;
+    z-index: 3;
+    box-shadow: 0 -2px 5px rgba(0,0,0,0.06);
+}
+
+.jd-tab i {
+    font-size: 14px;
+}
+
+.jd-icon-descargas {
+    color: #107c10; /* Verde estilo JDownloader */
+}
+
+.jd-icon-grabber {
+    color: #0078d7; /* Azul estilo JDownloader */
+}
+
+.jd-icon-options {
+    color: #555;
+}
+
+.jd-tab-badge {
+    background: #24a1de;
+    color: #fff;
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 10px;
+    font-weight: 700;
+}
+
+.header-right-tools {
+    display: flex;
+    align-items: center;
+    padding-bottom: 6px;
+}
+
+/* Tab Views */
+.tab-view {
+    display: none;
+    flex-direction: column;
+    flex: 1;
+    overflow: hidden;
+}
+
+.tab-view.active {
+    display: flex;
+}
+
 /* Toolbar funcional */
 .toolbar {
     background: #f0f0f0;
@@ -259,6 +376,182 @@ td:first-child, th:first-child {
     border-color: #16a34a;
     color: #15803d;
     box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+/* Árbol de paquetes y carpetas estilo JDownloader */
+.package-row {
+    background: #eef3f9 !important;
+    font-weight: 600;
+    border-top: 1px solid #c5d4e8;
+    border-bottom: 1px solid #c5d4e8;
+    cursor: pointer;
+    user-select: none;
+}
+
+.package-row:hover {
+    background: #e1ebf7 !important;
+}
+
+.package-row td {
+    padding: 6px 8px;
+    color: #1e3a5f;
+}
+
+.tree-toggle-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 17px;
+    height: 17px;
+    margin-right: 6px;
+    border: 1px solid #8e9ea7;
+    background: #ffffff;
+    border-radius: 2px;
+    font-size: 12px;
+    font-family: monospace;
+    font-weight: bold;
+    color: #333;
+    cursor: pointer;
+    vertical-align: middle;
+    line-height: 1;
+}
+
+.tree-toggle-btn:hover {
+    background: #e0f2fe;
+    border-color: #0284c7;
+    color: #0284c7;
+}
+
+.folder-icon {
+    color: #eab308; /* Oro JDownloader */
+    margin-right: 6px;
+    font-size: 14px;
+    vertical-align: middle;
+}
+
+.package-badge-count {
+    font-size: 11px;
+    font-weight: normal;
+    color: #555;
+    margin-left: 6px;
+}
+
+.child-file-row {
+    background-color: #ffffff;
+    transition: background-color 0.1s;
+}
+
+.child-file-row:nth-child(even) {
+    background-color: #fafbfc;
+}
+
+.child-file-row:hover {
+    background-color: #f0f7ff;
+}
+
+.child-file-row.selected {
+    background-color: #cce8ff !important;
+}
+
+.child-indent {
+    display: inline-block;
+    width: 22px;
+    position: relative;
+    height: 14px;
+    vertical-align: middle;
+}
+
+.child-indent::before {
+    content: "";
+    position: absolute;
+    left: 8px;
+    top: -12px;
+    bottom: 3px;
+    width: 1px;
+    background-color: #cbd5e1;
+}
+
+.child-indent::after {
+    content: "";
+    position: absolute;
+    left: 8px;
+    top: 7px;
+    width: 10px;
+    height: 1px;
+    background-color: #cbd5e1;
+}
+
+.tree-item-checkbox {
+    cursor: pointer;
+    vertical-align: middle;
+    margin-right: 7px;
+    position: relative;
+    top: -1px;
+}
+
+.file-type-icon {
+    margin-right: 6px;
+    font-size: 13px;
+    vertical-align: middle;
+}
+
+.icon-video { color: #8b5cf6; }
+.icon-archive { color: #ea580c; }
+.icon-audio { color: #ec4899; }
+.icon-doc { color: #0284c7; }
+.icon-game { color: #10b981; }
+.icon-generic { color: #64748b; }
+
+/* Empty state styling */
+.empty-state-cell {
+    text-align: center;
+    padding: 60px 20px !important;
+    color: #64748b;
+}
+
+.empty-icon {
+    font-size: 38px;
+    color: #94a3b8;
+    margin-bottom: 12px;
+    display: block;
+}
+
+.empty-subtitle {
+    font-size: 12px;
+    color: #94a3b8;
+    margin-top: 6px;
+    max-width: 500px;
+    margin-left: auto;
+    margin-right: auto;
+    white-space: normal;
+}
+
+.start-download-btn {
+    background: #107c10 !important;
+    border-color: #0b6a0b !important;
+    color: #fff !important;
+    font-weight: 600;
+}
+
+.start-download-btn:hover:not(:disabled) {
+    background: #0b6a0b !important;
+}
+
+.grabber-actions-toolbar {
+    background: #fafafa;
+    border-bottom: 1px solid #dcdcdc;
+    padding: 6px 12px;
+}
+
+.link-input-toolbar {
+    background: #f0f4f8;
+    border-bottom: 1px solid #cbd5e1;
+    padding: 8px 12px;
+}
+
+.btn-sm {
+    padding: 3px 8px;
+    font-size: 11px;
 }
 
 
@@ -665,6 +958,24 @@ td:first-child, th:first-child {
     background: #24a1de;
     border-color: #24a1de;
     color: #fff;
+}
+
+.channel-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: #e0f2fe;
+    color: #0284c7;
+    border: 1px solid #bae6fd;
+    padding: 1px 7px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 500;
+    vertical-align: middle;
+}
+
+.channel-badge i {
+    color: #24a1de;
 }
 
 

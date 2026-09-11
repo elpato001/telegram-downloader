@@ -12,125 +12,251 @@
 <body>
     <div class="window-container">
         
-        <!-- Toolbar funcional -->
-        <div class="toolbar">
-            <div class="toolbar-group input-group-link">
-                <label for="channelLink" style="white-space: nowrap; font-weight: 500;">Enlace de Telegram:</label>
-                <input type="text" id="channelLink" placeholder="Ej: https://t.me/nombre_canal o t.me/canal/123" class="main-input">
-                <button class="toolbar-btn primary-btn" id="btnScanSubmit" title="Escanear enlaces">
-                    <i class="fa-solid fa-magnifying-glass"></i> Escanear
-                </button>
+        <!-- Header con Sistema de Pestañas estilo JDownloader -->
+        <div class="app-header">
+            <div class="app-branding">
+                <img src="logo.png" alt="Logo" class="app-logo-small">
+                <span class="app-title-text">Telegram Downloader</span>
             </div>
             
-            <div class="separator"></div>
-            
-            <div class="toolbar-group">
-                <div style="position: relative; display: flex; align-items: center; margin-right: 5px;">
-                    <i class="fa-solid fa-search" style="position: absolute; left: 8px; color: #8e8e8e; font-size: 11px;"></i>
-                    <input type="text" id="searchInput" placeholder="Buscar archivo..." class="main-input" style="padding-left: 24px; width: 170px; font-size: 12px; height: 28px;">
-                </div>
-                <button class="toolbar-btn action-btn" id="btnDownload" title="Descargar Seleccionados" disabled>
-                    <i class="fa-solid fa-download"></i> Descargar
+            <div class="jd-tabs-container">
+                <button type="button" class="jd-tab active" id="tabDescargas">
+                    <i class="fa-solid fa-arrow-down jd-icon-descargas"></i>
+                    <span>Descargas</span>
+                    <span class="jd-tab-badge" id="badgeDescargasCount" style="display: none;">0</span>
                 </button>
-                <button class="toolbar-btn" id="btnPauseAll" title="Pausar todas las descargas" disabled style="display: none;">
-                    <i class="fa-solid fa-pause" style="color: #d97706;"></i> Pausar
+                <button type="button" class="jd-tab" id="tabGrabber">
+                    <i class="fa-solid fa-magnifying-glass jd-icon-grabber"></i>
+                    <span>Capturador de Enlaces</span>
+                    <span class="jd-tab-badge" id="badgeGrabberCount" style="display: none;">0</span>
                 </button>
-                <button class="toolbar-btn" id="btnResumeAll" title="Reanudar todas las descargas" disabled style="display: none;">
-                    <i class="fa-solid fa-play" style="color: #107c10;"></i> Reanudar
-                </button>
-                <button class="toolbar-btn" id="btnStopAll" title="Detener todas las descargas" disabled style="display: none;">
-                    <i class="fa-solid fa-stop" style="color: #d92d20;"></i> Detener
-                </button>
-                
-                <div id="userInfoGroup" style="display: none; align-items: center; font-size: 11px; margin-left: 15px; border-left: 1px solid #a0a0a0; padding-left: 15px;">
-                    <i class="fa-solid fa-user" style="color: #0078d7;"></i> <span id="userInfoName" style="margin-left: 5px;">Usuario</span>
-                    <span id="userInfoPremium" style="color: #d97706; font-weight: bold; margin-left: 3px; display: none;">[Premium]</span>
-                    <button class="toolbar-btn" id="btnLogout" style="margin-left: 10px; padding: 4px 8px; font-size: 11px; border-color: #d1d5db;" title="Cerrar Sesión">
+            </div>
+
+            <div class="header-right-tools">
+                <div id="userInfoGroup" style="display: none; align-items: center; font-size: 11px; gap: 8px;">
+                    <i class="fa-solid fa-user" style="color: #0078d7;"></i>
+                    <span id="userInfoName">Usuario</span>
+                    <span id="userInfoPremium" style="color: #d97706; font-weight: bold; display: none;">[Premium]</span>
+                    <button class="toolbar-btn" id="btnLogout" style="padding: 4px 8px; font-size: 11px;" title="Cerrar Sesión">
                         <i class="fa-solid fa-right-from-bracket" style="color: #d92d20;"></i>
                     </button>
                 </div>
             </div>
         </div>
 
-        <!-- Mensaje de estado superior -->
+        <!-- Mensaje de estado superior / Notificaciones de escaneo -->
         <div id="scanError" class="top-status-bar" style="display: none;"></div>
 
-        <!-- Main Workspace -->
-        <div class="workspace">
-            <!-- Main Content Area -->
-            <div class="main-content">
-                <!-- Table -->
-                <div class="table-container">
-                    <table id="downloadsTable">
-                        <thead>
-                            <tr>
-                                <th style="width: 40px; text-align: center;"><input type="checkbox" id="selectAll"></th>
-                                <th style="width: 35%; cursor: pointer;" id="sortName">Nombre del Archivo <i class="fa-solid fa-sort" style="color: #a0a0a0; margin-left: 5px;"></i></th>
-                                <th style="width: 90px; cursor: pointer;" id="sortSize">Tamaño <i class="fa-solid fa-sort" style="color: #a0a0a0; margin-left: 5px;"></i></th>
-                                <th style="width: 130px; cursor: pointer;" id="sortFecha">Fecha <i class="fa-solid fa-sort" style="color: #a0a0a0; margin-left: 5px;"></i></th>
-                                <th style="width: 90px;">Completado</th>
-                                <th style="width: 80px;">Progreso</th>
-                                <th style="width: 90px;">Velocidad</th>
-                                <th style="width: 95px; text-align: center;">Acciones</th>
-                            </tr>
-                        </thead>
-                        <tbody id="tableBody">
-                            <tr>
-                                <td colspan="8" style="text-align: center; color: #6b7280; padding: 20px;">
-                                    Pegá un enlace en la barra superior y presioná "Escanear" para buscar archivos.
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- VISTA 1: PESTAÑA DESCARGAS (Descargas en progreso / historial)   -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="viewDescargas" class="tab-view active">
+            <!-- Toolbar de Descargas -->
+            <div class="toolbar">
+                <div class="toolbar-group">
+                    <button class="toolbar-btn action-btn" id="btnResumeAll" title="Iniciar / Reanudar todas las descargas">
+                        <i class="fa-solid fa-play" style="color: #107c10;"></i> Reanudar Todo
+                    </button>
+                    <button class="toolbar-btn" id="btnPauseAll" title="Pausar todas las descargas">
+                        <i class="fa-solid fa-pause" style="color: #d97706;"></i> Pausar Todo
+                    </button>
+                    <button class="toolbar-btn" id="btnStopAll" title="Detener todas las descargas">
+                        <i class="fa-solid fa-stop" style="color: #d92d20;"></i> Detener Todo
+                    </button>
+                    <div class="separator"></div>
+                    <button class="toolbar-btn" id="btnClearCompleted" title="Limpiar descargas completadas de la lista">
+                        <i class="fa-solid fa-broom" style="color: #0284c7;"></i> Limpiar Completadas
+                    </button>
+                    <button class="toolbar-btn" id="btnDeleteSelectedDownloads" title="Eliminar descargas seleccionadas">
+                        <i class="fa-solid fa-trash-can" style="color: #d92d20;"></i> Eliminar
+                    </button>
                 </div>
 
-                <!-- Info Panel (Bottom) -->
-                <div class="info-panel" id="infoPanel">
-                    <div class="info-row" style="display: flex; justify-content: space-between; align-items: center; width: 100%; gap: 12px;">
-                        <div style="display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0;">
-                            <i class="fa-solid fa-file"></i> 
-                            <span id="infoName" style="font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Esperando enlace...</span>
-                        </div>
-                        <!-- Formatos soportados (sección central) -->
-                        <div style="display: flex; align-items: center; gap: 6px; font-size: 11px; white-space: nowrap;">
-                            <i class="fa-solid fa-filter" style="color: var(--text-muted);"></i>
-                            <span style="color: var(--text-muted);">Formatos:</span>
-                            <span id="formatsSummary" style="font-weight: 600; max-width: 250px; overflow: hidden; text-overflow: ellipsis; color: #0078d7;" title="Formatos permitidos">Todos</span>
-                            <button type="button" id="btnEditFormats" class="btn" title="Configurar formatos y extensiones soportadas" style="display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; font-size: 11px; cursor: pointer;">
-                                <i class="fa-solid fa-pen-to-square"></i>
-                                <span>Editar</span>
-                            </button>
-                        </div>
-                        <!-- Incluir fecha en nombre -->
-                        <div style="display: flex; align-items: center; gap: 6px; font-size: 11px; white-space: nowrap;">
-                            <input type="checkbox" id="chkIncludeDate" style="cursor: pointer;">
-                            <label for="chkIncludeDate" style="color: var(--text-muted); cursor: pointer;" title="Agrega la fecha de publicación entre paréntesis al nombre del archivo, ej: Video (2023-10-15).mp4">Incluir fecha</label>
-                        </div>
-                        <!-- Carpeta destino -->
-                        <div style="display: flex; align-items: center; gap: 6px;">
-                            <label for="customDir" style="color: var(--text-muted); font-size: 11px; white-space: nowrap;">Guardar en:</label>
-                            <input type="text" id="customDir" placeholder="Carpeta por defecto (descargas)" class="main-input" style="width: 260px; padding: 4px 6px; font-size: 11px;">
-                            <button type="button" id="btnBrowseDir" class="btn" title="Buscar carpeta en Windows o en red..." style="display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; font-size: 11px; white-space: nowrap; cursor: pointer;">
-                                <i class="fa-regular fa-folder-open"></i>
-                                <span>Examinar...</span>
-                            </button>
-                        </div>
+                <div class="toolbar-group">
+                    <div style="position: relative; display: flex; align-items: center;">
+                        <i class="fa-solid fa-search" style="position: absolute; left: 8px; color: #8e8e8e; font-size: 11px;"></i>
+                        <input type="text" id="searchDescargasInput" placeholder="Buscar en descargas..." class="main-input" style="padding-left: 24px; width: 180px; font-size: 12px; height: 28px;">
+                    </div>
+                    <button class="toolbar-btn" id="btnExpandAllDescargas" title="Expandir o contraer todas las carpetas">
+                        <i class="fa-solid fa-folder-tree"></i> <span id="txtExpandDescargas">Contraer Todo</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Tabla de Descargas con árbol de carpetas -->
+            <div class="workspace">
+                <div class="main-content">
+                    <div class="table-container">
+                        <table id="tableDescargas">
+                            <thead>
+                                <tr>
+                                    <th style="width: 38px; text-align: center;"><input type="checkbox" id="selectAllDescargas"></th>
+                                    <th style="width: 38%;">Nombre / Paquete</th>
+                                    <th style="width: 100px;">Tamaño</th>
+                                    <th style="width: 130px;">Fecha</th>
+                                    <th style="width: 100px;">Completado</th>
+                                    <th style="width: 130px;">Progreso</th>
+                                    <th style="width: 95px;">Velocidad</th>
+                                    <th style="width: 95px; text-align: center;">Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody id="bodyDescargas">
+                                <tr>
+                                    <td colspan="8" class="empty-state-cell">
+                                        <i class="fa-solid fa-inbox empty-icon"></i>
+                                        <div>No hay descargas en la lista.</div>
+                                        <div class="empty-subtitle">Abrí la pestaña <strong>"Capturador de Enlaces"</strong> para escanear y agregar descargas desde canales de Telegram.</div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- Status Bar -->
-        <div class="status-bar">
-            <div style="display: flex; gap: 10px; align-items: center;">
-                <span id="statusSelection">0 elementos seleccionados</span>
-                <span style="color: #a0a0a0;">|</span>
-                <span id="statusTotalSize" style="color: var(--text-main); font-weight: 500;">Tamaño total: 0 B</span>
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- VISTA 2: PESTAÑA CAPTURADOR DE ENLACES (Link Grabber)           -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="viewGrabber" class="tab-view" style="display: none;">
+            <!-- Barra superior para Añadir / Escanear Enlaces -->
+            <div class="toolbar link-input-toolbar">
+                <div class="toolbar-group input-group-link">
+                    <label for="channelLink" style="white-space: nowrap; font-weight: 600; color: #333;">
+                        <i class="fa-solid fa-link" style="color: #24a1de; margin-right: 4px;"></i> Enlace de Telegram:
+                    </label>
+                    <input type="text" id="channelLink" placeholder="Ej: https://t.me/nombre_canal o t.me/c/12345/678" class="main-input">
+                    <button class="toolbar-btn primary-btn" id="btnScanSubmit" title="Escanear y añadir paquete al capturador">
+                        <i class="fa-solid fa-magnifying-glass"></i> Escanear Enlace
+                    </button>
+                </div>
             </div>
-            <div class="status-speeds">
-                <span id="statusSpeed">D: 0 MB/s</span>
+
+            <!-- Toolbar de Acciones del Capturador -->
+            <div class="toolbar grabber-actions-toolbar">
+                <div class="toolbar-group">
+                    <button class="toolbar-btn primary-btn start-download-btn" id="btnStartGrabberDownloads" title="Iniciar la descarga de los elementos o paquetes seleccionados">
+                        <i class="fa-solid fa-circle-arrow-down"></i> Iniciar Descargas
+                    </button>
+                    <button class="toolbar-btn" id="btnDeleteSelectedGrabber" title="Eliminar los elementos seleccionados del capturador">
+                        <i class="fa-solid fa-trash-can" style="color: #d92d20;"></i> Borrar Selección
+                    </button>
+                    <button class="toolbar-btn" id="btnClearGrabber" title="Vaciar todos los paquetes del capturador">
+                        <i class="fa-solid fa-eraser"></i> Vaciar Capturador
+                    </button>
+                </div>
+
+                <div class="toolbar-group">
+                    <div style="position: relative; display: flex; align-items: center;">
+                        <i class="fa-solid fa-search" style="position: absolute; left: 8px; color: #8e8e8e; font-size: 11px;"></i>
+                        <input type="text" id="searchGrabberInput" placeholder="Buscar en capturador..." class="main-input" style="padding-left: 24px; width: 170px; font-size: 12px; height: 28px;">
+                    </div>
+                    <button class="toolbar-btn" id="btnExpandAllGrabber" title="Expandir o contraer todas las carpetas">
+                        <i class="fa-solid fa-folder-tree"></i> <span id="txtExpandGrabber">Contraer Todo</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Tabla del Capturador de Enlaces -->
+            <div class="workspace">
+                <div class="main-content">
+                    <div class="table-container">
+                        <table id="tableGrabber">
+                            <thead>
+                                <tr>
+                                    <th style="width: 38px; text-align: center;"><input type="checkbox" id="selectAllGrabber"></th>
+                                    <th style="width: 44%;">Nombre del Archivo / Paquete</th>
+                                    <th style="width: 100px;">Tamaño</th>
+                                    <th style="width: 130px;">Fecha</th>
+                                    <th style="width: 25%;">Carpeta de Destino</th>
+                                    <th style="width: 100px; text-align: center;">Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody id="bodyGrabber">
+                                <tr>
+                                    <td colspan="6" class="empty-state-cell">
+                                        <i class="fa-solid fa-folder-open empty-icon"></i>
+                                        <div>El Capturador de Enlaces está vacío.</div>
+                                        <div class="empty-subtitle">Pegá uno o varios enlaces de canales de Telegram arriba y presioná <strong>"Escanear Enlace"</strong>. Cada canal se guardará como una carpeta independiente.</div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
             </div>
         </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- PANEL INFERIOR Y BARRA DE ESTADO (Común a ambas pestañas)       -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div class="info-panel">
+            <div class="info-row" style="display: flex; justify-content: space-between; align-items: center; width: 100%; gap: 15px; flex-wrap: nowrap;">
+                <!-- Grupo Info Descargas -->
+                <div id="infoDescargasGroup" style="display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0;">
+                    <i class="fa-solid fa-circle-info" style="color: #0078d7;"></i>
+                    <span id="infoDescargasText" style="font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Sin descargas seleccionadas</span>
+                    <div style="display: flex; align-items: center; gap: 8px; font-size: 11px; margin-left: 8px; white-space: nowrap;">
+                        <span id="descargasActiveCount">0 descargas</span>
+                        <span style="color: #aaa;">|</span>
+                        <span id="descargasDoneCount" style="color: #107c10; font-weight: 600;">0 completadas</span>
+                    </div>
+                </div>
+
+                <!-- Grupo Info Capturador -->
+                <div id="infoGrabberGroup" style="display: none; align-items: center; gap: 8px; flex: 1; min-width: 0;">
+                    <i class="fa-solid fa-folder" style="color: #eab308;"></i>
+                    <span id="infoGrabberText" style="font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">0 paquetes en el capturador</span>
+                </div>
+
+                <!-- Barra de Configuración: Formatos, Fecha y Destino (Visible en ambas pestañas) -->
+                <div style="display: flex; align-items: center; gap: 14px; flex-shrink: 0;">
+                    <!-- Formatos soportados -->
+                    <div style="display: flex; align-items: center; gap: 6px; font-size: 11px;">
+                        <i class="fa-solid fa-filter" style="color: var(--text-muted);"></i>
+                        <span style="color: var(--text-muted);">Formatos:</span>
+                        <span id="formatsSummary" style="font-weight: 600; max-width: 190px; overflow: hidden; text-overflow: ellipsis; color: #0078d7;" title="Formatos permitidos">Todos</span>
+                        <button type="button" id="btnEditFormats" class="btn" style="padding: 2px 7px; font-size: 11px;" title="Configurar extensiones soportadas">
+                            <i class="fa-solid fa-pen-to-square"></i> Editar
+                        </button>
+                    </div>
+                    <!-- Incluir fecha -->
+                    <div style="display: flex; align-items: center; gap: 5px; font-size: 11px;">
+                        <input type="checkbox" id="chkIncludeDate" style="cursor: pointer;">
+                        <label for="chkIncludeDate" style="color: var(--text-muted); cursor: pointer;" title="Agrega la fecha de publicación al nombre del archivo">Incluir fecha</label>
+                    </div>
+                    <div style="height: 16px; width: 1px; background-color: var(--border-color, #cbd5e1);"></div>
+                    <!-- Carpeta destino global -->
+                    <div style="display: flex; align-items: center; gap: 6px;">
+                        <label for="customDir" style="color: var(--text-muted); font-size: 11px; white-space: nowrap;">Guardar descargas en:</label>
+                        <input type="text" id="customDir" placeholder="Carpeta por defecto (descargas)" class="main-input" style="width: 250px; padding: 4px 6px; font-size: 11px;">
+                        <button type="button" id="btnBrowseDir" class="btn" style="padding: 3px 8px; font-size: 11px;" title="Examinar carpeta...">
+                            <i class="fa-regular fa-folder-open"></i>
+                            <span>Examinar...</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Barra de estado inferior (Común a ambas pestañas) -->
+        <div class="status-bar">
+            <div id="statusDescargasGroup" style="display: flex; gap: 10px; align-items: center;">
+                <span id="statusSelectionDescargas">0 elementos seleccionados</span>
+                <span style="color: #a0a0a0;">|</span>
+                <span id="statusSizeDescargas" style="color: var(--text-main); font-weight: 500;">Tamaño total: 0 B</span>
+            </div>
+            <div id="statusGrabberGroup" style="display: none; gap: 10px; align-items: center;">
+                <span id="statusSelectionGrabber">0 elementos seleccionados</span>
+                <span style="color: #a0a0a0;">|</span>
+                <span id="statusSizeGrabber" style="color: var(--text-main); font-weight: 500;">Tamaño total: 0 B</span>
+            </div>
+            <div>
+                <span id="statusSpeed" style="font-weight: 600; color: #107c10;">D: 0 MB/s</span>
+                <span id="statusPackagesGrabber" style="color: var(--text-muted); display: none;">0 paquetes</span>
+            </div>
+        </div>
+
     </div>
 
     <!-- Login Modal -->

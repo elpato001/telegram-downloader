@@ -61,16 +61,43 @@ function formatFecha(fechaStr) {
     }
 }
 
-// DOM Elements
+function formatBytes(bytes) {
+    if (!bytes || bytes <= 0) return '0 B';
+    const k = 1024, sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+    const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1);
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+function getFileIconClass(filename) {
+    if (!filename) return 'fa-regular fa-file icon-generic';
+    const f = filename.toLowerCase();
+    if (f.endsWith('.mp4') || f.endsWith('.mkv') || f.endsWith('.avi') || f.endsWith('.mov') || f.endsWith('.webm') || f.endsWith('.flv') || f.endsWith('.wmv') || f.endsWith('.ts')) return 'fa-solid fa-file-video icon-video';
+    if (f.endsWith('.zip') || f.endsWith('.rar') || f.endsWith('.7z') || f.endsWith('.tar') || f.endsWith('.gz') || f.endsWith('.part1.rar') || f.endsWith('.z01')) return 'fa-solid fa-file-zipper icon-archive';
+    if (f.endsWith('.iso') || f.endsWith('.chd') || f.endsWith('.bin') || f.endsWith('.cue') || f.endsWith('.cso') || f.endsWith('.pkg') || f.endsWith('.nsp') || f.endsWith('.xci') || f.endsWith('.elf')) return 'fa-solid fa-gamepad icon-game';
+    if (f.endsWith('.mp3') || f.endsWith('.flac') || f.endsWith('.wav') || f.endsWith('.ogg') || f.endsWith('.m4a') || f.endsWith('.opus') || f.endsWith('.aac')) return 'fa-solid fa-file-audio icon-audio';
+    if (f.endsWith('.pdf') || f.endsWith('.epub') || f.endsWith('.doc') || f.endsWith('.docx') || f.endsWith('.txt') || f.endsWith('.cbr') || f.endsWith('.cbz')) return 'fa-solid fa-file-lines icon-doc';
+    return 'fa-regular fa-file icon-generic';
+}
+
+// Variables de estado del sistema estilo JDownloader
+let currentMainTab = 'descargas'; // 'descargas' | 'grabber'
+let downloadsData = [];
+let grabberPackages = [];
+let expandedDescargas = new Set();
+let expandedGrabber = new Set();
+let selectedDownloads = new Set();
+let selectedGrabberItems = new Set();
+let selectedGrabberPackages = new Set();
+let itemStates = {};
+let itemFilePaths = {};
+let itemSpeeds = {};
+let itemProgress = {};
+
+// DOM Elements comunes
 const loginModal = document.getElementById('loginModal');
-const tableBody = document.getElementById('tableBody');
-const btnScanSubmit = document.getElementById('btnScanSubmit');
+const scanError = document.getElementById('scanError');
 const channelLink = document.getElementById('channelLink');
-const btnDownload = document.getElementById('btnDownload');
-const btnPauseAll = document.getElementById('btnPauseAll');
-const btnResumeAll = document.getElementById('btnResumeAll');
-const btnStopAll = document.getElementById('btnStopAll');
-const selectAll = document.getElementById('selectAll');
+const btnScanSubmit = document.getElementById('btnScanSubmit');
 const customDirInput = document.getElementById('customDir');
 const chkIncludeDate = document.getElementById('chkIncludeDate');
 
@@ -80,15 +107,6 @@ if (chkIncludeDate) {
         localStorage.setItem('telegram_include_date', chkIncludeDate.checked);
     });
 }
-
-let itemStates = {};
-let itemFilePaths = {};
-
-// Info Panel
-const infoName = document.getElementById('infoName');
-const statusSelection = document.getElementById('statusSelection');
-const statusTotalSize = document.getElementById('statusTotalSize');
-const statusSpeed = document.getElementById('statusSpeed');
 
 // 1. App Init
 async function checkStatus() {
@@ -932,218 +950,754 @@ document.getElementById('btnResetSession').addEventListener('click', async () =>
     }
 });
 
-// 3. Scan Link
+// ═════════════════════════════════════════════════════════════════════════
+// 2. SISTEMA DE PESTAÑAS ESTILO JDOWNLOADER
+// ═════════════════════════════════════════════════════════════════════════
+
+const tabDescargas = document.getElementById('tabDescargas');
+const tabGrabber = document.getElementById('tabGrabber');
+const viewDescargas = document.getElementById('viewDescargas');
+const viewGrabber = document.getElementById('viewGrabber');
+const badgeDescargasCount = document.getElementById('badgeDescargasCount');
+const badgeGrabberCount = document.getElementById('badgeGrabberCount');
+
+function switchMainTab(tabName) {
+    currentMainTab = tabName;
+    const infoDescargasGroup = document.getElementById('infoDescargasGroup');
+    const infoGrabberGroup = document.getElementById('infoGrabberGroup');
+    const statusDescargasGroup = document.getElementById('statusDescargasGroup');
+    const statusGrabberGroup = document.getElementById('statusGrabberGroup');
+    const statusSpeed = document.getElementById('statusSpeed');
+    const statusPackagesGrabber = document.getElementById('statusPackagesGrabber');
+
+    if (tabName === 'descargas') {
+        if (tabDescargas) tabDescargas.classList.add('active');
+        if (tabGrabber) tabGrabber.classList.remove('active');
+        if (viewDescargas) viewDescargas.style.display = 'flex';
+        if (viewGrabber) viewGrabber.style.display = 'none';
+
+        if (infoDescargasGroup) infoDescargasGroup.style.display = 'flex';
+        if (infoGrabberGroup) infoGrabberGroup.style.display = 'none';
+        if (statusDescargasGroup) statusDescargasGroup.style.display = 'flex';
+        if (statusGrabberGroup) statusGrabberGroup.style.display = 'none';
+        if (statusSpeed) statusSpeed.style.display = 'inline';
+        if (statusPackagesGrabber) statusPackagesGrabber.style.display = 'none';
+
+        loadDownloadsData();
+    } else if (tabName === 'grabber') {
+        if (tabDescargas) tabDescargas.classList.remove('active');
+        if (tabGrabber) tabGrabber.classList.add('active');
+        if (viewDescargas) viewDescargas.style.display = 'none';
+        if (viewGrabber) viewGrabber.style.display = 'flex';
+
+        if (infoDescargasGroup) infoDescargasGroup.style.display = 'none';
+        if (infoGrabberGroup) infoGrabberGroup.style.display = 'flex';
+        if (statusDescargasGroup) statusDescargasGroup.style.display = 'none';
+        if (statusGrabberGroup) statusGrabberGroup.style.display = 'flex';
+        if (statusSpeed) statusSpeed.style.display = 'none';
+        if (statusPackagesGrabber) statusPackagesGrabber.style.display = 'inline';
+
+        loadGrabberData();
+    }
+}
+
+if (tabDescargas) tabDescargas.addEventListener('click', () => switchMainTab('descargas'));
+if (tabGrabber) tabGrabber.addEventListener('click', () => switchMainTab('grabber'));
+
+// ═════════════════════════════════════════════════════════════════════════
+// 3. CARGA Y GESTIÓN DE DATOS DEL CAPTURADOR DE ENLACES
+// ═════════════════════════════════════════════════════════════════════════
+
+async function loadGrabberData() {
+    try {
+        const res = await fetch(`${API_BASE}/grabber`);
+        const data = await res.json();
+        if (data.success) {
+            grabberPackages = data.packages || [];
+            // Por defecto, expandir todos los paquetes nuevos en el capturador
+            grabberPackages.forEach(p => {
+                if (!expandedGrabber.has(p.id)) {
+                    expandedGrabber.add(p.id);
+                }
+            });
+            updateGrabberBadges();
+            renderGrabberTable();
+        }
+    } catch (e) {
+        console.error("Error al cargar capturador:", e);
+    }
+}
+
+function updateGrabberBadges() {
+    let totalItems = 0;
+    grabberPackages.forEach(p => {
+        totalItems += (p.items || []).length;
+    });
+    if (badgeGrabberCount) {
+        if (totalItems > 0) {
+            badgeGrabberCount.textContent = totalItems;
+            badgeGrabberCount.style.display = 'inline-block';
+        } else {
+            badgeGrabberCount.style.display = 'none';
+        }
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// 4. CARGA Y GESTIÓN DE DATOS DE DESCARGAS
+// ═════════════════════════════════════════════════════════════════════════
+
+async function loadDownloadsData() {
+    try {
+        const res = await fetch(`${API_BASE}/history`);
+        const data = await res.json();
+        if (data.success) {
+            downloadsData = data.history || [];
+            // Registrar estados en caché
+            downloadsData.forEach(item => {
+                itemStates[item.db_id] = item.state;
+                if (item.file_path) itemFilePaths[item.db_id] = item.file_path;
+                // Por defecto, expandir los paquetes que tengan descargas
+                const pkg = item.package_name || 'Descargas';
+                if (!expandedDescargas.has(pkg)) {
+                    expandedDescargas.add(pkg);
+                }
+            });
+            updateDescargasBadges();
+            renderDescargasTable();
+            connectWebSocket();
+        }
+    } catch (e) {
+        console.error("Error al cargar historial de descargas:", e);
+    }
+}
+
+function updateDescargasBadges() {
+    let activeCount = 0;
+    let doneCount = 0;
+    downloadsData.forEach(d => {
+        const st = itemStates[d.db_id] || d.state;
+        if (st === 'downloading' || st === 'pending') activeCount++;
+        if (st === 'done') doneCount++;
+    });
+
+    if (badgeDescargasCount) {
+        if (activeCount > 0) {
+            badgeDescargasCount.textContent = activeCount;
+            badgeDescargasCount.style.display = 'inline-block';
+        } else {
+            badgeDescargasCount.style.display = 'none';
+        }
+    }
+
+    const descargasActiveCountEl = document.getElementById('descargasActiveCount');
+    const descargasDoneCountEl = document.getElementById('descargasDoneCount');
+    if (descargasActiveCountEl) descargasActiveCountEl.textContent = `${downloadsData.length} descargas (${activeCount} activas)`;
+    if (descargasDoneCountEl) descargasDoneCountEl.textContent = `${doneCount} completadas`;
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// 5. ESCANEAR ENLACE (AÑADIR AL CAPTURADOR)
+// ═════════════════════════════════════════════════════════════════════════
+
 btnScanSubmit.addEventListener('click', async () => {
-    const link = channelLink.value;
+    const link = channelLink.value.trim();
     if (!link) return;
     
     scanError.style.display = 'block';
-    scanError.textContent = 'Escaneando enlace, por favor espera...';
+    scanError.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Escaneando enlace y recolectando archivos, por favor espera...';
     scanError.style.backgroundColor = '#fff4ce';
     scanError.style.color = '#795548';
+    btnScanSubmit.disabled = true;
     
     try {
+        const customDir = customDirInput ? customDirInput.value.trim() : '';
         const res = await fetch(`${API_BASE}/scan`, {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ link })
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ link, custom_dir: customDir })
         });
         const data = await res.json();
         
         if (data.success) {
-            allScannedVideos = data.videos || [];
-            applyFormatFilter();
-            if (allScannedVideos.length === 0) {
-                scanError.style.display = 'block';
-                scanError.textContent = 'No se encontraron archivos en este enlace. Si es un canal privado o con temas/hilos, asegúrate de estar unido o ingresar el enlace directo.';
-                scanError.style.backgroundColor = '#fff4ce';
-                scanError.style.color = '#795548';
-            } else {
-                scanError.style.display = 'none';
+            grabberPackages = data.packages || [];
+            if (data.package_id) {
+                expandedGrabber.add(data.package_id);
             }
+            updateGrabberBadges();
+            
+            // Cambiar automáticamente a la pestaña del capturador para ver el paquete añadido
+            switchMainTab('grabber');
+            
+            scanError.style.display = 'block';
+            scanError.style.backgroundColor = '#e6fffa';
+            scanError.style.color = '#0d9488';
+            scanError.innerHTML = `✅ Paquete <strong>"${data.package_name}"</strong> añadido al Capturador con ${data.videos ? data.videos.length : 0} archivos.`;
+            
+            setTimeout(() => {
+                if (scanError.style.backgroundColor === 'rgb(230, 255, 250)') {
+                    scanError.style.display = 'none';
+                }
+            }, 5000);
+            
+            channelLink.value = '';
         } else {
+            scanError.style.display = 'block';
             scanError.textContent = 'Error: ' + data.error;
             scanError.style.backgroundColor = '#fde7e9';
             scanError.style.color = '#a80000';
         }
     } catch (e) {
-        scanError.textContent = 'Error de red';
+        scanError.style.display = 'block';
+        scanError.textContent = 'Error de red al conectar con el servidor.';
+        scanError.style.backgroundColor = '#fde7e9';
+        scanError.style.color = '#a80000';
+    } finally {
+        btnScanSubmit.disabled = false;
     }
 });
 
-// Permitir Enter en el input
 channelLink.addEventListener('keypress', (e) => {
     if (e.key === 'Enter') {
         btnScanSubmit.click();
     }
 });
 
-let sortConfig = { key: null, direction: 'asc' };
+// ═════════════════════════════════════════════════════════════════════════
+// 6. RENDERIZADO DE TABLA: CAPTURADOR DE ENLACES (Árbol por paquetes)
+// ═════════════════════════════════════════════════════════════════════════
 
-// 4. Table Logic
-function renderTable() {
-    tableBody.innerHTML = '';
+const bodyGrabber = document.getElementById('bodyGrabber');
+const searchGrabberInput = document.getElementById('searchGrabberInput');
+const selectAllGrabber = document.getElementById('selectAllGrabber');
+const btnExpandAllGrabber = document.getElementById('btnExpandAllGrabber');
+const txtExpandGrabber = document.getElementById('txtExpandGrabber');
+const statusSelectionGrabber = document.getElementById('statusSelectionGrabber');
+const statusSizeGrabber = document.getElementById('statusSizeGrabber');
+const statusPackagesGrabber = document.getElementById('statusPackagesGrabber');
+const infoGrabberText = document.getElementById('infoGrabberText');
+
+function renderGrabberTable() {
+    if (!bodyGrabber) return;
+    bodyGrabber.innerHTML = '';
     
-    if(currentVideos.length === 0) {
-        if (allScannedVideos.length > 0) {
-            tableBody.innerHTML = `<tr><td colspan="8" style="text-align: center; color: #6b7280; padding: 25px 20px;">
-                <i class="fa-solid fa-filter-circle-xmark" style="font-size: 22px; color: #0078d4; margin-bottom: 8px; display: block;"></i>
-                Se encontraron ${allScannedVideos.length} archivos en el canal, pero ninguno coincide con los formatos activos seleccionados.<br>
-                <button type="button" class="btn primary-btn" id="btnOpenModalFromEmpty" style="margin-top: 10px; font-size: 11px;">
-                    <i class="fa-solid fa-pen-to-square"></i> Editar formatos permitidos
-                </button>
-            </td></tr>`;
-            const btnOpenEmpty = document.getElementById('btnOpenModalFromEmpty');
-            if (btnOpenEmpty) {
-                btnOpenEmpty.addEventListener('click', openFormatsModal);
-            }
-        } else {
-            tableBody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: #6b7280; padding: 20px;">No se encontraron archivos en este enlace.</td></tr>';
-        }
+    if (grabberPackages.length === 0) {
+        bodyGrabber.innerHTML = `<tr>
+            <td colspan="6" class="empty-state-cell">
+                <i class="fa-solid fa-folder-open empty-icon"></i>
+                <div style="font-weight: 600; font-size: 14px; margin-bottom: 4px;">El Capturador de Enlaces está vacío</div>
+                <div class="empty-subtitle">Pegá un enlace de canal o mensaje de Telegram en la barra superior y hacé clic en "Escanear Enlace". Podés añadir múltiples canales y quedarán organizados aquí en carpetas hasta que decidas descargarlos o borrarlos.</div>
+            </td>
+        </tr>`;
+        updateGrabberSelection();
         return;
     }
     
-    currentVideos.forEach((v, displayIdx) => {
-        const oIdx = v.original_idx;
-        const state = itemStates[oIdx] || 'idle';
-        const tr = document.createElement('tr');
-        tr.id = `row-${oIdx}`;
-        const fechaFmt = v.fecha ? formatFecha(v.fecha) : '-';
-        tr.innerHTML = `
-            <td><input type="checkbox" class="row-check" data-id="${oIdx}"></td>
-            <td title="${v.nombre}">${v.nombre}</td>
-            <td>${v.tamanio_fmt}</td>
-            <td title="${v.fecha || ''}" style="font-size: 11px; white-space: nowrap;">${fechaFmt}</td>
-            <td id="comp-${oIdx}">0 B</td>
-            <td>
-                <div class="progress-bar-cell">
-                    <div class="progress-bar-fill" id="perc-fill-${oIdx}"></div>
-                    <div class="progress-bar-text" id="perc-text-${oIdx}">0%</div>
-                </div>
+    const searchTerm = searchGrabberInput ? searchGrabberInput.value.toLowerCase().trim() : '';
+    let totalGrabberPackagesCount = grabberPackages.length;
+    
+    grabberPackages.forEach(pkg => {
+        // Filtrar archivos del paquete por formatos permitidos y por búsqueda
+        const filteredItems = (pkg.items || []).filter(item => {
+            if (!isFormatAllowed(item.filename)) return false;
+            if (searchTerm && !item.filename.toLowerCase().includes(searchTerm)) return false;
+            return true;
+        });
+        
+        // Si hay búsqueda y este paquete no tiene coincidencias, no mostrarlo
+        if (searchTerm && filteredItems.length === 0) return;
+        
+        const isExpanded = expandedGrabber.has(pkg.id);
+        const pkgSize = filteredItems.reduce((acc, it) => acc + (it.total_size || 0), 0);
+        const allItemsChecked = filteredItems.length > 0 && filteredItems.every(it => selectedGrabberItems.has(it.id));
+        const someItemsChecked = filteredItems.some(it => selectedGrabberItems.has(it.id));
+        
+        // 1. Fila del Paquete / Carpeta
+        const trPkg = document.createElement('tr');
+        trPkg.className = 'package-row';
+        trPkg.dataset.pkgId = pkg.id;
+        
+        trPkg.innerHTML = `
+            <td style="text-align: center;">
+                <input type="checkbox" class="pkg-check-grabber" data-pkg-id="${pkg.id}" ${allItemsChecked ? 'checked' : ''}>
             </td>
-            <td id="spd-${oIdx}">-</td>
+            <td>
+                <button type="button" class="tree-toggle-btn" data-pkg-id="${pkg.id}" title="${isExpanded ? 'Contraer carpeta' : 'Expandir carpeta'}">
+                    ${isExpanded ? '−' : '+'}
+                </button>
+                <i class="fa-solid ${isExpanded ? 'fa-folder-open' : 'fa-folder'} folder-icon"></i>
+                <span style="font-weight: 600; color: #1e3a5f;" title="Carpeta contenedora: ${pkg.name}">${pkg.name}</span>
+                <span class="package-badge-count">(${filteredItems.length} archivos)</span>
+                ${pkg.channel_name ? `<span class="channel-badge" style="background: #e0f2fe; color: #0369a1; padding: 2px 7px; border-radius: 4px; font-size: 11px; margin-left: 6px; font-weight: 500;" title="Canal de Telegram: ${pkg.channel_name}"><i class="fa-brands fa-telegram"></i> ${pkg.channel_name}</span>` : ''}
+                <button type="button" class="row-action-btn" onclick="handleRenameGrabberPackage(event, ${pkg.id}, '${(pkg.name || '').replace(/'/g, "\\'")}')" title="Renombrar carpeta contenedora" style="padding: 2px 5px; font-size: 10px; margin-left: 4px; opacity: 0.7;">
+                    <i class="fa-solid fa-pen"></i>
+                </button>
+            </td>
+            <td><strong>${formatBytes(pkgSize)}</strong></td>
+            <td style="font-size: 11px; color: #555;">${filteredItems.length > 0 && filteredItems[0].fecha ? formatFecha(filteredItems[0].fecha) : '-'}</td>
+            <td style="font-size: 11px; color: #555; overflow: hidden; text-overflow: ellipsis;" title="${(pkg.custom_dir || 'Ruta por defecto') + (pkg.channel_name ? ' \\ ' + pkg.channel_name : '') + ' \\ ' + pkg.name}">
+                <i class="fa-regular fa-folder" style="color: #888; margin-right: 4px;"></i>
+                ${pkg.channel_name ? `<span style="color:#0369a1;">${pkg.channel_name}</span> \\ ` : ''}<strong>${pkg.name}</strong>
+            </td>
             <td style="text-align: center;">
                 <div style="display: inline-flex; gap: 4px; align-items: center; justify-content: center;">
-                    <button type="button" class="row-action-btn" id="btn-toggle-${oIdx}" onclick="handleToggleItem(event, ${oIdx})" title="Iniciar / Pausar / Reanudar">
-                        <i class="fa-solid fa-play"></i>
+                    <button type="button" class="row-action-btn start-download-btn" onclick="handleDownloadGrabberPackage(event, ${pkg.id})" title="Descargar todo este paquete" style="padding: 3px 8px; font-size: 11px;">
+                        <i class="fa-solid fa-download"></i> Descargar
                     </button>
-                    <button type="button" class="row-action-btn btn-danger" id="btn-stop-${oIdx}" onclick="handleStopItem(event, ${oIdx})" title="Detener" style="display: none;">
-                        <i class="fa-solid fa-stop"></i>
+                    <button type="button" class="row-action-btn btn-danger" onclick="handleDeleteGrabberPackage(event, ${pkg.id})" title="Eliminar paquete del capturador">
+                        <i class="fa-solid fa-trash-can"></i>
                     </button>
                 </div>
             </td>
         `;
         
-        tr.addEventListener('click', (e) => {
+        // Manejar checkbox del paquete
+        const pkgCb = trPkg.querySelector('.pkg-check-grabber');
+        if (someItemsChecked && !allItemsChecked) {
+            pkgCb.indeterminate = true;
+        }
+        pkgCb.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const checked = pkgCb.checked;
+            filteredItems.forEach(it => {
+                if (checked) selectedGrabberItems.add(it.id);
+                else selectedGrabberItems.delete(it.id);
+            });
+            renderGrabberTable();
+        });
+        
+        // Manejar clic en botón expandir o en la fila de paquete
+        const toggleBtn = trPkg.querySelector('.tree-toggle-btn');
+        const handleToggle = (e) => {
+            e.stopPropagation();
+            if (expandedGrabber.has(pkg.id)) {
+                expandedGrabber.delete(pkg.id);
+            } else {
+                expandedGrabber.add(pkg.id);
+            }
+            renderGrabberTable();
+        };
+        toggleBtn.addEventListener('click', handleToggle);
+        trPkg.addEventListener('click', (e) => {
             if (e.target.closest('.row-action-btn') || e.target.type === 'checkbox') return;
-            const cb = tr.querySelector('.row-check');
-            cb.checked = !cb.checked;
-            updateSelection();
-        });
-
-        tr.addEventListener('dblclick', (e) => {
-            if (itemStates[oIdx] === 'done') {
-                handleOpenFolder(e, oIdx);
-            }
+            handleToggle(e);
         });
         
-        tableBody.appendChild(tr);
-        updateRowUI(oIdx, state);
-    });
-}
-
-// Sorting logic
-function sortData(key) {
-    if (sortConfig.key === key) {
-        sortConfig.direction = sortConfig.direction === 'asc' ? 'desc' : 'asc';
-    } else {
-        sortConfig.key = key;
-        sortConfig.direction = 'asc';
-    }
-    
-    currentVideos.sort((a, b) => {
-        let valA = a[key];
-        let valB = b[key];
+        bodyGrabber.appendChild(trPkg);
         
-        if (typeof valA === 'string') valA = valA.toLowerCase();
-        if (typeof valB === 'string') valB = valB.toLowerCase();
-        
-        if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
-        if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
-        return 0;
-    });
-    
-    updateSortIcons();
-    renderTable();
-    updateSelection();
-}
-
-function updateSortIcons() {
-    const iconName = document.querySelector('#sortName i');
-    const iconSize = document.querySelector('#sortSize i');
-    const iconFecha = document.querySelector('#sortFecha i');
-    
-    iconName.className = 'fa-solid fa-sort';
-    iconSize.className = 'fa-solid fa-sort';
-    if (iconFecha) iconFecha.className = 'fa-solid fa-sort';
-    
-    const iconMap = { 'nombre': iconName, 'tamanio': iconSize, 'fecha': iconFecha };
-    const activeIcon = iconMap[sortConfig.key] || null;
-    if (activeIcon) {
-        activeIcon.className = sortConfig.direction === 'asc' ? 'fa-solid fa-sort-up' : 'fa-solid fa-sort-down';
-    }
-}
-
-document.getElementById('sortName').addEventListener('click', () => sortData('nombre'));
-document.getElementById('sortSize').addEventListener('click', () => sortData('tamanio'));
-document.getElementById('sortFecha').addEventListener('click', () => sortData('fecha'));
-
-function updateSelection() {
-    let count = 0;
-    let totalBytesSelected = 0;
-    const checks = document.querySelectorAll('.row-check');
-    let lastSelectedName = "-";
-
-    const videoMap = {};
-    const sourceList = allScannedVideos.length > 0 ? allScannedVideos : currentVideos;
-    sourceList.forEach(v => {
-        videoMap[v.original_idx] = v;
-    });
-
-    checks.forEach((cb) => {
-        const oIdx = parseInt(cb.dataset.id);
-        const tr = document.getElementById(`row-${oIdx}`);
-        if (cb.checked) {
-            if (tr) tr.classList.add('selected');
-            count++;
-            const v = videoMap[oIdx];
-            if (v) {
-                totalBytesSelected += (v.tamanio || 0);
-                lastSelectedName = v.nombre;
-            }
-        } else {
-            if (tr) tr.classList.remove('selected');
+        // 2. Filas de Archivos Hijas (si la carpeta está expandida)
+        if (isExpanded) {
+            filteredItems.forEach(item => {
+                const isSelected = selectedGrabberItems.has(item.id);
+                const trItem = document.createElement('tr');
+                trItem.className = `child-file-row ${isSelected ? 'selected' : ''}`;
+                trItem.dataset.itemId = item.id;
+                
+                trItem.innerHTML = `
+                    <td></td>
+                    <td>
+                        <span class="child-indent"></span>
+                        <input type="checkbox" class="item-check-grabber tree-item-checkbox" data-item-id="${item.id}" ${isSelected ? 'checked' : ''}>
+                        <i class="${getFileIconClass(item.filename)} file-type-icon"></i>
+                        <span title="${item.filename}">${item.filename}</span>
+                    </td>
+                    <td>${item.tamanio_fmt || formatBytes(item.total_size)}</td>
+                    <td style="font-size: 11px;">${item.fecha ? formatFecha(item.fecha) : '-'}</td>
+                    <td style="font-size: 11px; color: #777;">
+                        <i class="fa-solid fa-arrow-turn-up fa-rotate-90" style="color: #cbd5e1; margin-right: 4px;"></i>
+                        <span>En: ${pkg.channel_name ? '<span style=\"color:#0369a1;\">' + pkg.channel_name + '</span> \\ ' : ''}<strong>${pkg.name}</strong></span>
+                    </td>
+                    <td style="text-align: center;">
+                        <div style="display: inline-flex; gap: 4px; align-items: center; justify-content: center;">
+                            <button type="button" class="row-action-btn" onclick="handleDownloadSingleGrabberItem(event, ${item.id})" title="Descargar este archivo">
+                                <i class="fa-solid fa-download" style="color: #107c10;"></i>
+                            </button>
+                            <button type="button" class="row-action-btn btn-danger" onclick="handleDeleteSingleGrabberItem(event, ${item.id})" title="Quitar del capturador">
+                                <i class="fa-solid fa-xmark"></i>
+                            </button>
+                        </div>
+                    </td>
+                `;
+                
+                const itemCb = trItem.querySelector('.item-check-grabber');
+                itemCb.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    if (itemCb.checked) selectedGrabberItems.add(item.id);
+                    else selectedGrabberItems.delete(item.id);
+                    updateGrabberSelection();
+                });
+                
+                trItem.addEventListener('click', (e) => {
+                    if (e.target.closest('.row-action-btn') || e.target.type === 'checkbox') return;
+                    itemCb.checked = !itemCb.checked;
+                    if (itemCb.checked) selectedGrabberItems.add(item.id);
+                    else selectedGrabberItems.delete(item.id);
+                    updateGrabberSelection();
+                });
+                
+                bodyGrabber.appendChild(trItem);
+            });
         }
     });
     
-    btnDownload.disabled = count === 0;
-    statusSelection.textContent = `${count} elementos seleccionados`;
-    if (statusTotalSize) {
-        statusTotalSize.textContent = `Tamaño total: ${formatBytes(totalBytesSelected)}`;
-    }
+    updateGrabberSelection();
+}
 
-    if (count === 1) {
-        infoName.textContent = lastSelectedName;
-    } else if (count > 1) {
-        infoName.textContent = "(Múltiples archivos seleccionados)";
-    } else {
-        infoName.textContent = "Esperando selección...";
+function updateGrabberSelection() {
+    let count = 0;
+    let totalBytesSelected = 0;
+    
+    grabberPackages.forEach(pkg => {
+        (pkg.items || []).forEach(item => {
+            if (selectedGrabberItems.has(item.id)) {
+                count++;
+                totalBytesSelected += (item.total_size || 0);
+            }
+        });
+    });
+    
+    if (statusSelectionGrabber) {
+        statusSelectionGrabber.textContent = `${count} elementos seleccionados`;
+    }
+    if (statusSizeGrabber) {
+        statusSizeGrabber.textContent = `Tamaño total seleccionado: ${formatBytes(totalBytesSelected)}`;
+    }
+    if (statusPackagesGrabber) {
+        statusPackagesGrabber.textContent = `${grabberPackages.length} paquetes`;
+    }
+    if (infoGrabberText) {
+        if (count === 1) infoGrabberText.textContent = "1 archivo seleccionado para descargar";
+        else if (count > 1) infoGrabberText.textContent = `${count} archivos seleccionados de distintos paquetes`;
+        else infoGrabberText.textContent = `${grabberPackages.length} paquetes disponibles en el capturador`;
     }
 }
 
-selectAll.addEventListener('change', (e) => {
-    document.querySelectorAll('.row-check').forEach(cb => cb.checked = e.target.checked);
-    updateSelection();
-});
+if (searchGrabberInput) {
+    searchGrabberInput.addEventListener('input', renderGrabberTable);
+}
+
+if (selectAllGrabber) {
+    selectAllGrabber.addEventListener('change', () => {
+        const checked = selectAllGrabber.checked;
+        grabberPackages.forEach(pkg => {
+            (pkg.items || []).forEach(item => {
+                if (checked && isFormatAllowed(item.filename)) {
+                    selectedGrabberItems.add(item.id);
+                } else {
+                    selectedGrabberItems.delete(item.id);
+                }
+            });
+        });
+        renderGrabberTable();
+    });
+}
+
+if (btnExpandAllGrabber && txtExpandGrabber) {
+    btnExpandAllGrabber.addEventListener('click', () => {
+        if (expandedGrabber.size === grabberPackages.length && grabberPackages.length > 0) {
+            expandedGrabber.clear();
+            txtExpandGrabber.textContent = "Expandir Todo";
+        } else {
+            grabberPackages.forEach(p => expandedGrabber.add(p.id));
+            txtExpandGrabber.textContent = "Contraer Todo";
+        }
+        renderGrabberTable();
+    });
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// 7. RENDERIZADO DE TABLA: DESCARGAS (Árbol por carpetas/paquetes)
+// ═════════════════════════════════════════════════════════════════════════
+
+const bodyDescargas = document.getElementById('bodyDescargas');
+const searchDescargasInput = document.getElementById('searchDescargasInput');
+const selectAllDescargas = document.getElementById('selectAllDescargas');
+const btnExpandAllDescargas = document.getElementById('btnExpandAllDescargas');
+const txtExpandDescargas = document.getElementById('txtExpandDescargas');
+const statusSelectionDescargas = document.getElementById('statusSelectionDescargas');
+const statusSizeDescargas = document.getElementById('statusSizeDescargas');
+const infoDescargasText = document.getElementById('infoDescargasText');
+
+function renderDescargasTable() {
+    if (!bodyDescargas) return;
+    bodyDescargas.innerHTML = '';
+    
+    if (downloadsData.length === 0) {
+        bodyDescargas.innerHTML = `<tr>
+            <td colspan="8" class="empty-state-cell">
+                <i class="fa-solid fa-inbox empty-icon"></i>
+                <div style="font-weight: 600; font-size: 14px; margin-bottom: 4px;">No hay descargas en la lista</div>
+                <div class="empty-subtitle">Abrí la pestaña <strong>"Capturador de Enlaces"</strong> para escanear y agregar descargas desde canales de Telegram.</div>
+            </td>
+        </tr>`;
+        updateDescargasSelection();
+        return;
+    }
+    
+    const searchTerm = searchDescargasInput ? searchDescargasInput.value.toLowerCase().trim() : '';
+    
+    // Agrupar descargas por nombre de paquete
+    const grouped = {};
+    downloadsData.forEach(dl => {
+        if (searchTerm && !dl.nombre.toLowerCase().includes(searchTerm) && !(dl.package_name || '').toLowerCase().includes(searchTerm)) {
+            return;
+        }
+        const pkgName = dl.package_name || 'Descargas';
+        if (!grouped[pkgName]) grouped[pkgName] = [];
+        grouped[pkgName].push(dl);
+    });
+    
+    const packageNames = Object.keys(grouped);
+    if (packageNames.length === 0) {
+        bodyDescargas.innerHTML = `<tr><td colspan="8" style="text-align: center; color: #6b7280; padding: 25px;">No se encontraron descargas que coincidan con la búsqueda.</td></tr>`;
+        updateDescargasSelection();
+        return;
+    }
+    
+    packageNames.forEach(pkgName => {
+        const items = grouped[pkgName];
+        const isExpanded = expandedDescargas.has(pkgName);
+        
+        let pkgTotalSize = 0;
+        let pkgDownloadedBytes = 0;
+        let activeDownloading = 0;
+        let hasPaused = false;
+        let hasStopped = false;
+        let allDone = true;
+        
+        items.forEach(it => {
+            pkgTotalSize += (it.tamanio || 0);
+            const downloaded = itemProgress[it.db_id] !== undefined ? itemProgress[it.db_id] : (it.downloaded_bytes || 0);
+            pkgDownloadedBytes += downloaded;
+            
+            const st = itemStates[it.db_id] || it.state;
+            if (st === 'downloading') activeDownloading++;
+            if (st === 'paused') hasPaused = true;
+            if (st === 'stopped') hasStopped = true;
+            if (st !== 'done') allDone = false;
+        });
+        
+        const pkgPercent = pkgTotalSize > 0 ? ((pkgDownloadedBytes / pkgTotalSize) * 100).toFixed(1) : 0;
+        const allItemsChecked = items.every(it => selectedDownloads.has(it.db_id));
+        const someItemsChecked = items.some(it => selectedDownloads.has(it.db_id));
+        
+        // Determinar estado agregado del paquete
+        let pkgStateText = 'En cola';
+        let pkgColor = '#666';
+        if (allDone) {
+            pkgStateText = 'Completado';
+            pkgColor = '#107c10';
+        } else if (activeDownloading > 0) {
+            pkgStateText = `Descargando (${activeDownloading})`;
+            pkgColor = '#0078d7';
+        } else if (hasPaused) {
+            pkgStateText = 'Pausado';
+            pkgColor = '#d97706';
+        } else if (hasStopped) {
+            pkgStateText = 'Detenido';
+            pkgColor = '#d92d20';
+        }
+        
+        // 1. Fila de Paquete en Descargas
+        const trPkg = document.createElement('tr');
+        trPkg.className = 'package-row';
+        trPkg.id = `pkg-dl-row-${encodeURIComponent(pkgName)}`;
+        
+        trPkg.innerHTML = `
+            <td style="text-align: center;">
+                <input type="checkbox" class="pkg-check-descargas" data-pkg-name="${pkgName}" ${allItemsChecked ? 'checked' : ''}>
+            </td>
+            <td>
+                <button type="button" class="tree-toggle-btn" data-pkg-name="${pkgName}" title="${isExpanded ? 'Contraer carpeta' : 'Expandir carpeta'}">
+                    ${isExpanded ? '−' : '+'}
+                </button>
+                <i class="fa-solid ${isExpanded ? 'fa-folder-open' : 'fa-folder'} folder-icon"></i>
+                <span style="font-weight: 600; color: #1e3a5f;">${pkgName}</span>
+                <span class="package-badge-count">(${items.length} archivos)</span>
+                ${items[0] && items[0].channel_name ? `<span class="channel-badge" style="background: #e0f2fe; color: #0369a1; padding: 2px 7px; border-radius: 4px; font-size: 11px; margin-left: 6px; font-weight: 500;" title="Canal de Telegram: ${items[0].channel_name}"><i class="fa-brands fa-telegram"></i> ${items[0].channel_name}</span>` : ''}
+            </td>
+            <td><strong>${formatBytes(pkgTotalSize)}</strong></td>
+            <td style="font-size: 11px; color: #555;">${items.length > 0 && items[0].fecha ? formatFecha(items[0].fecha) : '-'}</td>
+            <td id="pkg-comp-${encodeURIComponent(pkgName)}">${formatBytes(pkgDownloadedBytes)}</td>
+            <td>
+                <div class="progress-bar-cell">
+                    <div class="progress-bar-fill" id="pkg-perc-fill-${encodeURIComponent(pkgName)}" style="width: ${pkgPercent}%; background-color: ${allDone ? '#107c10' : '#0078d7'};"></div>
+                    <div class="progress-bar-text" id="pkg-perc-text-${encodeURIComponent(pkgName)}">${pkgPercent}%</div>
+                </div>
+            </td>
+            <td style="font-size: 11px; font-weight: 600; color: ${pkgColor};" id="pkg-spd-${encodeURIComponent(pkgName)}">
+                ${pkgStateText}
+            </td>
+            <td style="text-align: center;">
+                <div style="display: inline-flex; gap: 4px; align-items: center; justify-content: center;">
+                    <button type="button" class="row-action-btn" onclick="handleTogglePackage(event, '${pkgName.replace(/'/g, "\\'")}')" title="Pausar / Reanudar paquete">
+                        <i class="fa-solid ${activeDownloading > 0 ? 'fa-pause' : 'fa-play'}" style="color: ${activeDownloading > 0 ? '#d97706' : '#107c10'};"></i>
+                    </button>
+                    <button type="button" class="row-action-btn btn-danger" onclick="handleDeletePackage(event, '${pkgName.replace(/'/g, "\\'")}')" title="Eliminar paquete de la lista">
+                        <i class="fa-solid fa-trash-can"></i>
+                    </button>
+                </div>
+            </td>
+        `;
+        
+        const pkgCb = trPkg.querySelector('.pkg-check-descargas');
+        if (someItemsChecked && !allItemsChecked) {
+            pkgCb.indeterminate = true;
+        }
+        pkgCb.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const checked = pkgCb.checked;
+            items.forEach(it => {
+                if (checked) selectedDownloads.add(it.db_id);
+                else selectedDownloads.delete(it.db_id);
+            });
+            renderDescargasTable();
+        });
+        
+        const toggleBtn = trPkg.querySelector('.tree-toggle-btn');
+        const handleToggle = (e) => {
+            e.stopPropagation();
+            if (expandedDescargas.has(pkgName)) {
+                expandedDescargas.delete(pkgName);
+            } else {
+                expandedDescargas.add(pkgName);
+            }
+            renderDescargasTable();
+        };
+        toggleBtn.addEventListener('click', handleToggle);
+        trPkg.addEventListener('click', (e) => {
+            if (e.target.closest('.row-action-btn') || e.target.type === 'checkbox') return;
+            handleToggle(e);
+        });
+        
+        bodyDescargas.appendChild(trPkg);
+        
+        // 2. Filas de Archivos en Descargas (si la carpeta está expandida)
+        if (isExpanded) {
+            items.forEach(item => {
+                const dbId = item.db_id;
+                const isSelected = selectedDownloads.has(dbId);
+                const state = itemStates[dbId] || item.state;
+                const downloaded = itemProgress[dbId] !== undefined ? itemProgress[dbId] : (item.downloaded_bytes || 0);
+                const percent = item.total_size > 0 ? ((downloaded / item.total_size) * 100).toFixed(1) : 0;
+                
+                const trItem = document.createElement('tr');
+                trItem.className = `child-file-row ${isSelected ? 'selected' : ''}`;
+                trItem.id = `row-dl-${dbId}`;
+                trItem.dataset.dbId = dbId;
+                
+                trItem.innerHTML = `
+                    <td></td>
+                    <td>
+                        <span class="child-indent"></span>
+                        <input type="checkbox" class="item-check-descargas tree-item-checkbox" data-db-id="${dbId}" ${isSelected ? 'checked' : ''}>
+                        <i class="${getFileIconClass(item.nombre)} file-type-icon"></i>
+                        <span title="${item.nombre}">${item.nombre}</span>
+                    </td>
+                    <td>${item.tamanio_fmt || formatBytes(item.total_size)}</td>
+                    <td style="font-size: 11px; white-space: nowrap;">${item.fecha ? formatFecha(item.fecha) : '-'}</td>
+                    <td id="comp-dl-${dbId}">${formatBytes(downloaded)}</td>
+                    <td>
+                        <div class="progress-bar-cell">
+                            <div class="progress-bar-fill" id="perc-fill-dl-${dbId}" style="width: ${state === 'done' ? 100 : percent}%;"></div>
+                            <div class="progress-bar-text" id="perc-text-dl-${dbId}">${state === 'done' ? '100%' : percent + '%'}</div>
+                        </div>
+                    </td>
+                    <td id="spd-dl-${dbId}">-</td>
+                    <td style="text-align: center;">
+                        <div style="display: inline-flex; gap: 4px; align-items: center; justify-content: center;">
+                            <button type="button" class="row-action-btn" id="btn-toggle-dl-${dbId}" onclick="handleToggleDownload(event, ${dbId})" title="Iniciar / Pausar / Reanudar">
+                                <i class="fa-solid fa-play"></i>
+                            </button>
+                            <button type="button" class="row-action-btn btn-danger" id="btn-stop-dl-${dbId}" onclick="handleStopDownload(event, ${dbId})" title="Detener" style="display: none;">
+                                <i class="fa-solid fa-stop"></i>
+                            </button>
+                            <button type="button" class="row-action-btn btn-danger" id="btn-del-dl-${dbId}" onclick="handleDeleteDownload(event, ${dbId})" title="Eliminar del historial">
+                                <i class="fa-solid fa-xmark"></i>
+                            </button>
+                        </div>
+                    </td>
+                `;
+                
+                const itemCb = trItem.querySelector('.item-check-descargas');
+                itemCb.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    if (itemCb.checked) selectedDownloads.add(dbId);
+                    else selectedDownloads.delete(dbId);
+                    updateDescargasSelection();
+                });
+                
+                trItem.addEventListener('click', (e) => {
+                    if (e.target.closest('.row-action-btn') || e.target.type === 'checkbox') return;
+                    itemCb.checked = !itemCb.checked;
+                    if (itemCb.checked) selectedDownloads.add(dbId);
+                    else selectedDownloads.delete(dbId);
+                    updateDescargasSelection();
+                });
+                
+                bodyDescargas.appendChild(trItem);
+                updateDownloadRowUI(dbId, state);
+            });
+        }
+    });
+    
+    updateDescargasSelection();
+}
+
+function updateDescargasSelection() {
+    let count = 0;
+    let totalBytesSelected = 0;
+    let lastSelectedName = "-";
+    
+    downloadsData.forEach(item => {
+        if (selectedDownloads.has(item.db_id)) {
+            count++;
+            totalBytesSelected += (item.total_size || 0);
+            lastSelectedName = item.nombre;
+        }
+    });
+    
+    if (statusSelectionDescargas) {
+        statusSelectionDescargas.textContent = `${count} elementos seleccionados`;
+    }
+    if (statusSizeDescargas) {
+        statusSizeDescargas.textContent = `Tamaño total: ${formatBytes(totalBytesSelected)}`;
+    }
+    if (infoDescargasText) {
+        if (count === 1) infoDescargasText.textContent = lastSelectedName;
+        else if (count > 1) infoDescargasText.textContent = `(${count} descargas seleccionadas)`;
+        else infoDescargasText.textContent = "Sin descargas seleccionadas";
+    }
+}
+
+if (searchDescargasInput) {
+    searchDescargasInput.addEventListener('input', renderDescargasTable);
+}
+
+if (selectAllDescargas) {
+    selectAllDescargas.addEventListener('change', () => {
+        const checked = selectAllDescargas.checked;
+        downloadsData.forEach(item => {
+            if (checked) selectedDownloads.add(item.db_id);
+            else selectedDownloads.delete(item.db_id);
+        });
+        renderDescargasTable();
+    });
+}
+
+if (btnExpandAllDescargas && txtExpandDescargas) {
+    btnExpandAllDescargas.addEventListener('click', () => {
+        const allPackageNames = [...new Set(downloadsData.map(d => d.package_name || 'Descargas'))];
+        if (expandedDescargas.size === allPackageNames.length && allPackageNames.length > 0) {
+            expandedDescargas.clear();
+            txtExpandDescargas.textContent = "Expandir Todo";
+        } else {
+            allPackageNames.forEach(name => expandedDescargas.add(name));
+            txtExpandDescargas.textContent = "Contraer Todo";
+        }
+        renderDescargasTable();
+    });
+}
 
 // 4.1 Selector de carpeta de destino y persistencia
 const btnBrowseDir = document.getElementById('btnBrowseDir');
@@ -1601,36 +2155,322 @@ if (btnSaveFormats) {
 // Inicializar texto de formatos en barra inferior
 updateFormatsSummaryUI();
 
-// 5. Downloading and Controls
-btnDownload.addEventListener('click', async () => {
-    const selectedIds = Array.from(document.querySelectorAll('.row-check:checked')).map(cb => parseInt(cb.dataset.id));
-    if (selectedIds.length === 0) return;
-    
-    const customDir = customDirInput ? customDirInput.value.trim() : '';
-    const includeDate = chkIncludeDate ? chkIncludeDate.checked : false;
-    
-    selectedIds.forEach(idx => {
-        itemStates[idx] = 'pending';
-        updateRowUI(idx, 'pending');
-    });
-    setGlobalButtonsState('downloading');
-    
-    connectWebSocket();
-    
-    await fetch(`${API_BASE}/download`, {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ indices: selectedIds, custom_dir: customDir, include_date: includeDate })
-    });
-});
+// ═════════════════════════════════════════════════════════════════════════
+// 8. ACCIONES DEL CAPTURADOR DE ENLACES (Link Grabber Actions)
+// ═════════════════════════════════════════════════════════════════════════
 
-if (btnPauseAll) {
-    btnPauseAll.addEventListener('click', async () => {
-        await fetch(`${API_BASE}/download/pause`, {
+const btnStartGrabberDownloads = document.getElementById('btnStartGrabberDownloads');
+const btnDeleteSelectedGrabber = document.getElementById('btnDeleteSelectedGrabber');
+const btnClearGrabber = document.getElementById('btnClearGrabber');
+
+if (btnStartGrabberDownloads) {
+    btnStartGrabberDownloads.addEventListener('click', async () => {
+        // Recolectar elementos a descargar
+        let itemsToDownload = [];
+        
+        if (selectedGrabberItems.size > 0) {
+            grabberPackages.forEach(pkg => {
+                (pkg.items || []).forEach(item => {
+                    if (selectedGrabberItems.has(item.id)) {
+                        itemsToDownload.push({ ...item, package_name: pkg.name, channel_name: pkg.channel_name || '' });
+                    }
+                });
+            });
+        } else {
+            // Si no hay ninguno seleccionado expresamente, descargar todos los que cumplan con el filtro de formato
+            grabberPackages.forEach(pkg => {
+                (pkg.items || []).forEach(item => {
+                    if (isFormatAllowed(item.filename)) {
+                        itemsToDownload.push({ ...item, package_name: pkg.name, channel_name: pkg.channel_name || '' });
+                    }
+                });
+            });
+        }
+        
+        if (itemsToDownload.length === 0) {
+            alert('No hay elementos seleccionados ni disponibles para descargar en el Capturador.');
+            return;
+        }
+        
+        const customDir = customDirInput ? customDirInput.value.trim() : '';
+        const includeDate = chkIncludeDate ? chkIncludeDate.checked : false;
+        
+        const payloadItems = itemsToDownload.map(it => ({
+            message_id: it.message_id,
+            entity_id: it.entity_id || '',
+            filename: it.filename,
+            total_size: it.total_size,
+            fecha: it.fecha || '',
+            custom_dir: it.custom_dir || customDir,
+            package_name: it.package_name || 'Descargas',
+            channel_name: it.channel_name || '',
+            grabber_item_id: it.id
+        }));
+        
+        btnStartGrabberDownloads.disabled = true;
+        const origHtml = btnStartGrabberDownloads.innerHTML;
+        btnStartGrabberDownloads.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Iniciando...';
+        
+        try {
+            const res = await fetch(`${API_BASE}/download`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    items: payloadItems,
+                    custom_dir: customDir,
+                    include_date: includeDate,
+                    remove_from_grabber: true
+                })
+            });
+            const data = await res.json();
+            
+            if (data.success) {
+                // Quitar de seleccionados
+                itemsToDownload.forEach(it => selectedGrabberItems.delete(it.id));
+                // Cambiar a la pestaña de Descargas para ver el progreso en tiempo real
+                switchMainTab('descargas');
+                await loadGrabberData();
+                await loadDownloadsData();
+            } else {
+                alert('Error al iniciar descargas: ' + (data.error || 'Desconocido'));
+            }
+        } catch (e) {
+            alert('Error de red al conectar con el servidor: ' + e.message);
+        } finally {
+            btnStartGrabberDownloads.disabled = false;
+            btnStartGrabberDownloads.innerHTML = origHtml;
+        }
+    });
+}
+
+if (btnDeleteSelectedGrabber) {
+    btnDeleteSelectedGrabber.addEventListener('click', async () => {
+        if (selectedGrabberItems.size === 0) {
+            alert('No hay elementos seleccionados en el Capturador.');
+            return;
+        }
+        if (!confirm(`¿Eliminar ${selectedGrabberItems.size} elemento(s) del capturador?`)) return;
+        
+        try {
+            await fetch(`${API_BASE}/grabber/delete`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ item_ids: Array.from(selectedGrabberItems) })
+            });
+            selectedGrabberItems.clear();
+            await loadGrabberData();
+        } catch (e) {
+            console.error(e);
+        }
+    });
+}
+
+if (btnClearGrabber) {
+    btnClearGrabber.addEventListener('click', async () => {
+        if (grabberPackages.length === 0) return;
+        if (!confirm('¿Seguro que querés vaciar todos los paquetes y enlaces del Capturador?')) return;
+        
+        try {
+            await fetch(`${API_BASE}/grabber/clear`, { method: 'POST' });
+            selectedGrabberItems.clear();
+            await loadGrabberData();
+        } catch (e) {
+            console.error(e);
+        }
+    });
+}
+
+window.handleRenameGrabberPackage = async function(event, pkgId, currentName) {
+    if (event) event.stopPropagation();
+    const newName = prompt("Nuevo nombre para la carpeta contenedora:", currentName);
+    if (!newName || newName.trim() === "" || newName.trim() === currentName) return;
+    try {
+        const res = await fetch(`${API_BASE}/grabber/rename`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ index: 'all' })
+            body: JSON.stringify({ package_id: pkgId, name: newName.trim() })
         });
-        setGlobalButtonsState('paused');
+        const data = await res.json();
+        if (data.success) {
+            await loadGrabberData();
+        }
+    } catch (e) {
+        alert("Error al renombrar carpeta: " + e.message);
+    }
+};
+
+window.handleDownloadGrabberPackage = async function(event, pkgId) {
+    if (event) event.stopPropagation();
+    const pkg = grabberPackages.find(p => p.id === pkgId);
+    if (!pkg || !pkg.items || pkg.items.length === 0) return;
+    
+    const customDir = pkg.custom_dir || (customDirInput ? customDirInput.value.trim() : '');
+    const includeDate = chkIncludeDate ? chkIncludeDate.checked : false;
+    
+    const items = pkg.items.filter(it => isFormatAllowed(it.filename));
+    if (items.length === 0) {
+        alert('Ningún archivo en este paquete coincide con los formatos activos.');
+        return;
+    }
+    
+    const payloadItems = items.map(it => ({
+        message_id: it.message_id,
+        entity_id: it.entity_id || '',
+        filename: it.filename,
+        total_size: it.total_size,
+        fecha: it.fecha || '',
+        custom_dir: it.custom_dir || customDir,
+        package_name: pkg.name,
+        channel_name: pkg.channel_name || '',
+        grabber_item_id: it.id
+    }));
+    
+    try {
+        const res = await fetch(`${API_BASE}/download`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                items: payloadItems,
+                custom_dir: customDir,
+                include_date: includeDate,
+                remove_from_grabber: true
+            })
+        });
+        const data = await res.json();
+        if (data.success) {
+            items.forEach(it => selectedGrabberItems.delete(it.id));
+            switchMainTab('descargas');
+            await loadGrabberData();
+            await loadDownloadsData();
+        }
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+};
+
+window.handleDeleteGrabberPackage = async function(event, pkgId) {
+    if (event) event.stopPropagation();
+    if (!confirm('¿Eliminar este paquete del capturador de enlaces?')) return;
+    try {
+        await fetch(`${API_BASE}/grabber/delete`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ package_ids: [pkgId] })
+        });
+        await loadGrabberData();
+    } catch (e) {
+        console.error(e);
+    }
+};
+
+window.handleDownloadSingleGrabberItem = async function(event, itemId) {
+    if (event) event.stopPropagation();
+    let targetItem = null;
+    let targetPkg = null;
+    
+    for (const pkg of grabberPackages) {
+        const found = (pkg.items || []).find(it => it.id === itemId);
+        if (found) {
+            targetItem = found;
+            targetPkg = pkg;
+            break;
+        }
+    }
+    if (!targetItem) return;
+    
+    const customDir = targetItem.custom_dir || targetPkg.custom_dir || (customDirInput ? customDirInput.value.trim() : '');
+    const includeDate = chkIncludeDate ? chkIncludeDate.checked : false;
+    
+    const payloadItems = [{
+        message_id: targetItem.message_id,
+        entity_id: targetItem.entity_id || '',
+        filename: targetItem.filename,
+        total_size: targetItem.total_size,
+        fecha: targetItem.fecha || '',
+        custom_dir: customDir,
+        package_name: targetPkg.name,
+        channel_name: targetPkg.channel_name || '',
+        grabber_item_id: targetItem.id
+    }];
+    
+    try {
+        const res = await fetch(`${API_BASE}/download`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                items: payloadItems,
+                custom_dir: customDir,
+                include_date: includeDate,
+                remove_from_grabber: true
+            })
+        });
+        const data = await res.json();
+        if (data.success) {
+            selectedGrabberItems.delete(targetItem.id);
+            switchMainTab('descargas');
+            await loadGrabberData();
+            await loadDownloadsData();
+        }
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+};
+
+window.handleDeleteSingleGrabberItem = async function(event, itemId) {
+    if (event) event.stopPropagation();
+    try {
+        await fetch(`${API_BASE}/grabber/delete`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ item_ids: [itemId] })
+        });
+        selectedGrabberItems.delete(itemId);
+        await loadGrabberData();
+    } catch (e) {
+        console.error(e);
+    }
+};
+
+// ═════════════════════════════════════════════════════════════════════════
+// 9. ACCIONES DE LA PESTAÑA DESCARGAS (Downloads Actions)
+// ═════════════════════════════════════════════════════════════════════════
+
+const btnClearCompleted = document.getElementById('btnClearCompleted');
+const btnDeleteSelectedDownloads = document.getElementById('btnDeleteSelectedDownloads');
+const btnResumeAll = document.getElementById('btnResumeAll');
+const btnPauseAll = document.getElementById('btnPauseAll');
+const btnStopAll = document.getElementById('btnStopAll');
+
+if (btnClearCompleted) {
+    btnClearCompleted.addEventListener('click', async () => {
+        try {
+            await fetch(`${API_BASE}/downloads/clear_completed`, { method: 'POST' });
+            await loadDownloadsData();
+        } catch (e) {
+            console.error(e);
+        }
+    });
+}
+
+if (btnDeleteSelectedDownloads) {
+    btnDeleteSelectedDownloads.addEventListener('click', async () => {
+        if (selectedDownloads.size === 0) {
+            alert('No hay descargas seleccionadas.');
+            return;
+        }
+        if (!confirm(`¿Eliminar ${selectedDownloads.size} descarga(s) del historial?`)) return;
+        
+        try {
+            await fetch(`${API_BASE}/downloads/delete`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ db_ids: Array.from(selectedDownloads) })
+            });
+            selectedDownloads.clear();
+            await loadDownloadsData();
+        } catch (e) {
+            console.error(e);
+        }
     });
 }
 
@@ -1641,7 +2481,17 @@ if (btnResumeAll) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ index: 'all' })
         });
-        setGlobalButtonsState('downloading');
+        connectWebSocket();
+    });
+}
+
+if (btnPauseAll) {
+    btnPauseAll.addEventListener('click', async () => {
+        await fetch(`${API_BASE}/download/pause`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ index: 'all' })
+        });
     });
 }
 
@@ -1652,58 +2502,121 @@ if (btnStopAll) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ index: 'all' })
         });
-        setGlobalButtonsState('stopped');
     });
 }
 
-window.handleToggleItem = async function(event, idx) {
+window.handleTogglePackage = async function(event, pkgName) {
     if (event) event.stopPropagation();
-    const state = itemStates[idx] || 'idle';
+    const pkgDownloads = downloadsData.filter(d => (d.package_name || 'Descargas') === pkgName);
+    if (pkgDownloads.length === 0) return;
+    
+    // Si alguna se está descargando, pausamos todas las del paquete
+    const isAnyDownloading = pkgDownloads.some(d => (itemStates[d.db_id] || d.state) === 'downloading');
+    
+    for (const dl of pkgDownloads) {
+        if (isAnyDownloading) {
+            if ((itemStates[dl.db_id] || dl.state) === 'downloading') {
+                await fetch(`${API_BASE}/download/pause`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ index: dl.db_id })
+                });
+            }
+        } else {
+            const st = itemStates[dl.db_id] || dl.state;
+            if (st === 'paused') {
+                await fetch(`${API_BASE}/download/resume`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ index: dl.db_id })
+                });
+            } else if (st !== 'done') {
+                await fetch(`${API_BASE}/download`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ indices: [dl.db_id], is_resume: true })
+                });
+            }
+        }
+    }
+    connectWebSocket();
+};
+
+window.handleDeletePackage = async function(event, pkgName) {
+    if (event) event.stopPropagation();
+    if (!confirm(`¿Eliminar el paquete "${pkgName}" y todas sus descargas del historial?`)) return;
+    try {
+        await fetch(`${API_BASE}/downloads/delete`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ package_names: [pkgName] })
+        });
+        await loadDownloadsData();
+    } catch (e) {
+        console.error(e);
+    }
+};
+
+window.handleToggleDownload = async function(event, dbId) {
+    if (event) event.stopPropagation();
+    const state = itemStates[dbId] || 'idle';
     
     if (state === 'downloading') {
         await fetch(`${API_BASE}/download/pause`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ index: idx })
+            body: JSON.stringify({ index: dbId })
         });
     } else if (state === 'paused') {
         await fetch(`${API_BASE}/download/resume`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ index: idx })
+            body: JSON.stringify({ index: dbId })
         });
+        connectWebSocket();
     } else {
-        const customDir = customDirInput ? customDirInput.value.trim() : '';
-        const includeDate = chkIncludeDate ? chkIncludeDate.checked : false;
-        itemStates[idx] = 'pending';
-        updateRowUI(idx, 'pending');
-        setGlobalButtonsState('downloading');
+        itemStates[dbId] = 'pending';
+        updateDownloadRowUI(dbId, 'pending');
         connectWebSocket();
         await fetch(`${API_BASE}/download`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ indices: [idx], custom_dir: customDir, include_date: includeDate })
+            body: JSON.stringify({ indices: [dbId], is_resume: true })
         });
     }
 };
 
-window.handleStopItem = async function(event, idx) {
+window.handleStopDownload = async function(event, dbId) {
     if (event) event.stopPropagation();
     await fetch(`${API_BASE}/download/stop`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ index: idx })
+        body: JSON.stringify({ index: dbId })
     });
 };
 
-// handleOpenFolder removed
+window.handleDeleteDownload = async function(event, dbId) {
+    if (event) event.stopPropagation();
+    try {
+        await fetch(`${API_BASE}/downloads/delete`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ db_ids: [dbId] })
+        });
+        selectedDownloads.delete(dbId);
+        await loadDownloadsData();
+    } catch (e) {
+        console.error(e);
+    }
+};
 
-function updateRowUI(idx, state) {
-    const btnToggle = document.getElementById(`btn-toggle-${idx}`);
-    const btnStop = document.getElementById(`btn-stop-${idx}`);
-    const percFill = document.getElementById(`perc-fill-${idx}`);
-    const percText = document.getElementById(`perc-text-${idx}`);
-    const spdEl = document.getElementById(`spd-${idx}`);
+// Actualiza el aspecto de una fila de descarga individual
+function updateDownloadRowUI(dbId, state) {
+    const btnToggle = document.getElementById(`btn-toggle-dl-${dbId}`);
+    const btnStop = document.getElementById(`btn-stop-dl-${dbId}`);
+    const percFill = document.getElementById(`perc-fill-dl-${dbId}`);
+    const percText = document.getElementById(`perc-text-dl-${dbId}`);
+    const spdEl = document.getElementById(`spd-dl-${dbId}`);
 
     if (!btnToggle) return;
 
@@ -1741,19 +2654,17 @@ function updateRowUI(idx, state) {
         btnToggle.style.display = 'inline-flex';
         if (btnStop) btnStop.style.display = 'none';
         if (spdEl) spdEl.textContent = 'Detenido';
-        if (percText && percText.textContent !== '100%') percText.textContent = 'Detenido';
         if (percFill) percFill.style.backgroundColor = '#d92d20';
     } else if (state === 'done') {
         btnToggle.style.display = 'none';
         if (btnStop) btnStop.style.display = 'none';
-        if (spdEl) spdEl.textContent = '-';
-        if (percText) percText.textContent = 'Completado';
+        if (spdEl) spdEl.textContent = 'Completado';
+        if (percText) percText.textContent = '100%';
         if (percFill) {
             percFill.style.width = '100%';
             percFill.style.backgroundColor = '#107c10';
         }
     } else {
-        // idle
         btnToggle.innerHTML = '<i class="fa-solid fa-play" style="color: #0078d7;"></i>';
         btnToggle.title = 'Descargar este archivo';
         btnToggle.style.display = 'inline-flex';
@@ -1761,118 +2672,186 @@ function updateRowUI(idx, state) {
     }
 }
 
-function setGlobalButtonsState(state) {
-    if (!btnPauseAll || !btnResumeAll || !btnStopAll) return;
+// Actualiza el progreso agregado y estado de la fila del paquete padre en Descargas
+function updatePackageRowUI(pkgName) {
+    if (!pkgName) return;
+    const items = downloadsData.filter(d => (d.package_name || 'Descargas') === pkgName);
+    if (items.length === 0) return;
     
-    if (state === 'downloading') {
-        btnPauseAll.style.display = 'inline-flex';
-        btnPauseAll.disabled = false;
-        btnResumeAll.style.display = 'none';
-        btnStopAll.style.display = 'inline-flex';
-        btnStopAll.disabled = false;
-        btnDownload.disabled = true;
-    } else if (state === 'paused') {
-        btnPauseAll.style.display = 'none';
-        btnResumeAll.style.display = 'inline-flex';
-        btnResumeAll.disabled = false;
-        btnStopAll.style.display = 'inline-flex';
-        btnStopAll.disabled = false;
-        btnDownload.disabled = true;
-        statusSpeed.textContent = 'D: 0 MB/s (Pausado)';
-    } else if (state === 'stopped' || state === 'idle') {
-        btnPauseAll.style.display = 'none';
-        btnResumeAll.style.display = 'none';
-        btnStopAll.style.display = 'none';
-        btnDownload.disabled = false;
-        updateSelection();
-        statusSpeed.textContent = 'D: 0 MB/s';
+    let totalSize = 0;
+    let downloadedBytes = 0;
+    let activeDownloading = 0;
+    let hasPaused = false;
+    let hasStopped = false;
+    let allDone = true;
+    
+    items.forEach(it => {
+        totalSize += (it.tamanio || 0);
+        const downloaded = itemProgress[it.db_id] !== undefined ? itemProgress[it.db_id] : (it.downloaded_bytes || 0);
+        downloadedBytes += downloaded;
+        
+        const st = itemStates[it.db_id] || it.state;
+        if (st === 'downloading') activeDownloading++;
+        if (st === 'paused') hasPaused = true;
+        if (st === 'stopped') hasStopped = true;
+        if (st !== 'done') allDone = false;
+    });
+    
+    const percent = totalSize > 0 ? ((downloadedBytes / totalSize) * 100).toFixed(1) : 0;
+    const pkgCompEl = document.getElementById(`pkg-comp-${encodeURIComponent(pkgName)}`);
+    const pkgFillEl = document.getElementById(`pkg-perc-fill-${encodeURIComponent(pkgName)}`);
+    const pkgTextEl = document.getElementById(`pkg-perc-text-${encodeURIComponent(pkgName)}`);
+    const pkgSpdEl = document.getElementById(`pkg-spd-${encodeURIComponent(pkgName)}`);
+    
+    if (pkgCompEl) pkgCompEl.textContent = formatBytes(downloadedBytes);
+    if (pkgFillEl) {
+        pkgFillEl.style.width = `${percent}%`;
+        pkgFillEl.style.backgroundColor = allDone ? '#107c10' : '#0078d7';
+    }
+    if (pkgTextEl) pkgTextEl.textContent = `${percent}%`;
+    
+    if (pkgSpdEl) {
+        if (allDone) {
+            pkgSpdEl.textContent = 'Completado';
+            pkgSpdEl.style.color = '#107c10';
+        } else if (activeDownloading > 0) {
+            pkgSpdEl.textContent = `Descargando (${activeDownloading})`;
+            pkgSpdEl.style.color = '#0078d7';
+        } else if (hasPaused) {
+            pkgSpdEl.textContent = 'Pausado';
+            pkgSpdEl.style.color = '#d97706';
+        } else if (hasStopped) {
+            pkgSpdEl.textContent = 'Detenido';
+            pkgSpdEl.style.color = '#d92d20';
+        } else {
+            pkgSpdEl.textContent = 'En cola';
+            pkgSpdEl.style.color = '#666';
+        }
     }
 }
 
+// ═════════════════════════════════════════════════════════════════════════
+// 10. WEBSOCKET Y SINCRONIZACIÓN EN TIEMPO REAL
+// ═════════════════════════════════════════════════════════════════════════
+
 function connectWebSocket() {
-    if (ws) ws.close();
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+        return;
+    }
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
     
     ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        
-        if (data.type === 'qr_update') {
-            onQrTokenReceived(data.token_url, data.expires);
-        } else if (data.type === 'qr_success') {
-            onQrLoginSuccess(data.user);
-        } else if (data.type === 'qr_needs_password') {
-            onQrNeedsPassword();
-        } else if (data.type === 'qr_expired') {
-            onQrExpired();
-        } else if (data.type === 'qr_error') {
-            onQrError(data.error);
-        } else if (data.type === 'scan_progress') {
-            const scanError = document.getElementById('scanError');
-            if (scanError) {
-                scanError.style.display = 'block';
-                scanError.textContent = `Escaneando... (Revisados ${data.scanned} mensajes, ${data.found} archivos encontrados)`;
-                scanError.style.backgroundColor = '#e8f0fe';
-                scanError.style.color = '#1a73e8';
-            }
-        } else if (data.type === 'start') {
-            infoName.textContent = `Descargando: ${data.filename}`;
-            itemStates[data.index] = 'downloading';
-            updateRowUI(data.index, 'downloading');
-            setGlobalButtonsState('downloading');
-        } else if (data.type === 'progress') {
-            const idx = data.index;
-            const percent = ((data.downloaded / data.total_size) * 100).toFixed(1);
+        try {
+            const data = JSON.parse(event.data);
             
-            const compEl = document.getElementById(`comp-${idx}`);
-            const percFill = document.getElementById(`perc-fill-${idx}`);
-            const percText = document.getElementById(`perc-text-${idx}`);
-            const spdEl = document.getElementById(`spd-${idx}`);
+            if (data.type === 'qr_update') {
+                if (typeof onQrTokenReceived === 'function') onQrTokenReceived(data.token_url, data.expires);
+            } else if (data.type === 'qr_success') {
+                if (typeof onQrLoginSuccess === 'function') onQrLoginSuccess(data.user);
+            } else if (data.type === 'qr_needs_password') {
+                if (typeof onQrNeedsPassword === 'function') onQrNeedsPassword();
+            } else if (data.type === 'qr_expired') {
+                if (typeof onQrExpired === 'function') onQrExpired();
+            } else if (data.type === 'qr_error') {
+                if (typeof onQrError === 'function') onQrError(data.error);
+            } else if (data.type === 'scan_progress') {
+                const scanErr = document.getElementById('scanError');
+                if (scanErr) {
+                    scanErr.style.display = 'block';
+                    scanErr.textContent = `Escaneando... (Revisados ${data.scanned} mensajes, ${data.found} archivos encontrados)`;
+                    scanErr.style.backgroundColor = '#e8f0fe';
+                    scanErr.style.color = '#1a73e8';
+                }
+            } else if (data.type === 'start') {
+                const dbId = data.db_id || data.index;
+                itemStates[dbId] = 'downloading';
+                updateDownloadRowUI(dbId, 'downloading');
+                if (data.package_name) updatePackageRowUI(data.package_name);
+                updateDescargasBadges();
+                
+                const infoDescargasText = document.getElementById('infoDescargasText');
+                if (infoDescargasText) infoDescargasText.textContent = `Descargando: ${data.filename}`;
+            } else if (data.type === 'progress') {
+                const dbId = data.db_id || data.index;
+                itemProgress[dbId] = data.downloaded;
+                const percent = data.total_size > 0 ? ((data.downloaded / data.total_size) * 100).toFixed(1) : 0;
+                
+                const compEl = document.getElementById(`comp-dl-${dbId}`);
+                const percFill = document.getElementById(`perc-fill-dl-${dbId}`);
+                const percText = document.getElementById(`perc-text-dl-${dbId}`);
+                const spdEl = document.getElementById(`spd-dl-${dbId}`);
 
-            if (compEl) compEl.textContent = formatBytes(data.downloaded);
-            if (percFill) percFill.style.width = `${percent}%`;
-            if (percText) percText.textContent = `${percent}%`;
-            
-            if (data.state === 'paused') {
-                if (spdEl) spdEl.textContent = 'Pausado';
-                updateRowUI(idx, 'paused');
-            } else {
-                if (spdEl) spdEl.textContent = `${data.speed_mbps} MB/s`;
-                statusSpeed.textContent = `D: ${data.speed_mbps} MB/s`;
-                updateRowUI(idx, 'downloading');
+                if (compEl) compEl.textContent = formatBytes(data.downloaded);
+                if (percFill) percFill.style.width = `${percent}%`;
+                if (percText) percText.textContent = `${percent}%`;
+                
+                const statusSpeed = document.getElementById('statusSpeed');
+                if (data.state === 'paused') {
+                    if (spdEl) spdEl.textContent = 'Pausado';
+                    itemStates[dbId] = 'paused';
+                    updateDownloadRowUI(dbId, 'paused');
+                } else {
+                    if (spdEl) spdEl.textContent = `${data.speed_mbps} MB/s`;
+                    if (statusSpeed) statusSpeed.textContent = `D: ${data.speed_mbps} MB/s`;
+                    itemStates[dbId] = 'downloading';
+                    updateDownloadRowUI(dbId, 'downloading');
+                }
+                
+                if (data.package_name) {
+                    updatePackageRowUI(data.package_name);
+                }
+            } else if (data.type === 'status_change') {
+                const dbId = data.db_id || data.index;
+                itemStates[dbId] = data.state;
+                if (data.file_path) itemFilePaths[dbId] = data.file_path;
+                updateDownloadRowUI(dbId, data.state);
+                if (data.package_name) updatePackageRowUI(data.package_name);
+                updateDescargasBadges();
+            } else if (data.type === 'done') {
+                const dbId = data.db_id || data.index;
+                itemStates[dbId] = 'done';
+                if (data.file_path) itemFilePaths[dbId] = data.file_path;
+                
+                const percFill = document.getElementById(`perc-fill-dl-${dbId}`);
+                const percText = document.getElementById(`perc-text-dl-${dbId}`);
+                const spdEl = document.getElementById(`spd-dl-${dbId}`);
+                if (percFill) {
+                    percFill.style.width = '100%';
+                    percFill.style.backgroundColor = '#107c10';
+                }
+                if (percText) percText.textContent = '100%';
+                if (spdEl) spdEl.textContent = 'Completado';
+                
+                updateDownloadRowUI(dbId, 'done');
+                if (data.package_name) updatePackageRowUI(data.package_name);
+                updateDescargasBadges();
+            } else if (data.type === 'finish_all') {
+                const infoDescargasText = document.getElementById('infoDescargasText');
+                if (infoDescargasText) infoDescargasText.textContent = "Todas las descargas han finalizado.";
+                const statusSpeed = document.getElementById('statusSpeed');
+                if (statusSpeed) statusSpeed.textContent = 'D: 0 MB/s';
+                updateDescargasBadges();
+                loadDownloadsData();
             }
-        } else if (data.type === 'status_change') {
-            itemStates[data.index] = data.state;
-            if (data.file_path) itemFilePaths[data.index] = data.file_path;
-            updateRowUI(data.index, data.state);
-        } else if (data.type === 'global_status') {
-            setGlobalButtonsState(data.state);
-        } else if (data.type === 'done') {
-            const idx = data.index;
-            itemStates[idx] = 'done';
-            if (data.file_path) itemFilePaths[idx] = data.file_path;
-            const percFill = document.getElementById(`perc-fill-${idx}`);
-            const percText = document.getElementById(`perc-text-${idx}`);
-            if (percFill) percFill.style.width = '100%';
-            if (percText) percText.textContent = '100%';
-            updateRowUI(idx, 'done');
-        } else if (data.type === 'finish_all') {
-            infoName.textContent = "Descargas finalizadas.";
-            setGlobalButtonsState('idle');
+        } catch (err) {
+            console.error("Error procesando mensaje WebSocket:", err);
         }
+    };
+    
+    ws.onclose = () => {
+        // Reintentar conexión silenciosamente si la app sigue activa
+        setTimeout(() => {
+            if (currentMainTab === 'descargas') connectWebSocket();
+        }, 5000);
     };
 }
 
-function formatBytes(bytes) {
-    if (!bytes || bytes <= 0) return '0 B';
-    const k = 1024, sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
-    const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1);
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-}
-
-const searchInput = document.getElementById('searchInput');
-if (searchInput) {
-    searchInput.addEventListener('input', applyFormatFilter);
-}
+// ═════════════════════════════════════════════════════════════════════════
+// 11. INICIALIZACIÓN DE LA APLICACIÓN
+// ═════════════════════════════════════════════════════════════════════════
 
 checkStatus();
+loadDownloadsData();
+loadGrabberData();
+
