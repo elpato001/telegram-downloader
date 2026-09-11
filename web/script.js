@@ -1851,6 +1851,10 @@ function connectWebSocket() {
             const idx = data.index;
             itemStates[idx] = 'done';
             if (data.file_path) itemFilePaths[idx] = data.file_path;
+            const percFill = document.getElementById(`perc-fill-${idx}`);
+            const percText = document.getElementById(`perc-text-${idx}`);
+            if (percFill) percFill.style.width = '100%';
+            if (percText) percText.textContent = '100%';
             updateRowUI(idx, 'done');
         } else if (data.type === 'finish_all') {
             infoName.textContent = "Descargas finalizadas.";

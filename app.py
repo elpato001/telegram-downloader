@@ -1005,10 +1005,12 @@ async def process_downloads(db_ids, custom_dir=""):
         if not item:
             continue
             
+        target_idx = item.original_idx if item.original_idx >= 0 else db_id
+
         if download_mgr.global_cancelled or item.cancelled:
             item.state = "stopped"
             database.update_download_state(db_id, "stopped")
-            await manager.send_json({"type": "status_change", "index": db_id, "state": "stopped"})
+            await manager.send_json({"type": "status_change", "index": target_idx, "state": "stopped"})
             continue
 
         # Esperar si hay pausa global
@@ -1019,7 +1021,7 @@ async def process_downloads(db_ids, custom_dir=""):
         if download_mgr.global_cancelled or item.cancelled:
             item.state = "stopped"
             database.update_download_state(db_id, "stopped")
-            await manager.send_json({"type": "status_change", "index": db_id, "state": "stopped"})
+            await manager.send_json({"type": "status_change", "index": target_idx, "state": "stopped"})
             continue
 
         download_mgr.active_index = db_id
@@ -1048,8 +1050,8 @@ async def process_downloads(db_ids, custom_dir=""):
             except Exception as e:
                 item.state = "error"
                 database.update_download_state(db_id, "error")
-                await manager.send_json({"type": "error", "message": f"No se pudo acceder al mensaje en Telegram: {e}", "index": db_id})
-                await manager.send_json({"type": "status_change", "index": db_id, "state": "error"})
+                await manager.send_json({"type": "error", "message": f"No se pudo acceder al mensaje en Telegram: {e}", "index": target_idx})
+                await manager.send_json({"type": "status_change", "index": target_idx, "state": "error"})
                 continue
         
         download_dir = Path(base_dir) / carpeta
@@ -1063,17 +1065,17 @@ async def process_downloads(db_ids, custom_dir=""):
             "current": i + 1,
             "total": len(db_ids),
             "filename": nombre,
-            "index": db_id
+            "index": target_idx
         })
-        await manager.send_json({"type": "status_change", "index": db_id, "state": "downloading"})
+        await manager.send_json({"type": "status_change", "index": target_idx, "state": "downloading"})
 
         if ruta_destino.exists() and ruta_destino.stat().st_size == tamanio and tamanio > 0:
             item.state = "done"
             item.downloaded_bytes = tamanio
             database.update_download_state(db_id, "done")
             database.update_download_progress(db_id, tamanio, str(ruta_destino.resolve()))
-            await manager.send_json({"type": "done", "index": db_id, "file_path": str(ruta_destino.resolve())})
-            await manager.send_json({"type": "status_change", "index": db_id, "state": "done", "file_path": str(ruta_destino.resolve())})
+            await manager.send_json({"type": "done", "index": target_idx, "file_path": str(ruta_destino.resolve())})
+            await manager.send_json({"type": "status_change", "index": target_idx, "state": "done", "file_path": str(ruta_destino.resolve())})
             continue
             
         try:
@@ -1133,15 +1135,15 @@ async def process_downloads(db_ids, custom_dir=""):
                         item.downloaded_bytes = descargados_total
                         
                         current_time = time.time()
-                        if current_time - last_time > 0.5:
+                        if current_time - last_time > 0.2:
                             speed = (descargados_total - last_bytes) / (current_time - last_time) / (1024*1024)
                             database.update_download_progress(db_id, descargados_total)
                             await manager.send_json({
                                 "type": "progress",
                                 "downloaded": descargados_total,
                                 "total_size": tamanio,
-                                "speed_mbps": round(speed, 1),
-                                "index": db_id,
+                                "speed_mbps": round(max(0, speed), 1),
+                                "index": target_idx,
                                 "state": item.state
                             })
                             last_time = current_time
@@ -1167,19 +1169,19 @@ async def process_downloads(db_ids, custom_dir=""):
                 database.update_download_state(db_id, "stopped")
                 database.update_download_progress(db_id, descargados_total, item.file_path)
                 await manager.send_json({
-                    "type": "progress", "downloaded": descargados_total, "total_size": tamanio, "speed_mbps": 0, "index": db_id, "state": "stopped"
+                    "type": "progress", "downloaded": descargados_total, "total_size": tamanio, "speed_mbps": 0, "index": target_idx, "state": "stopped"
                 })
-                await manager.send_json({"type": "status_change", "index": db_id, "state": "stopped"})
+                await manager.send_json({"type": "status_change", "index": target_idx, "state": "stopped"})
             else:
                 item.state = "done"
                 item.downloaded_bytes = tamanio
                 database.update_download_state(db_id, "done")
                 database.update_download_progress(db_id, tamanio, item.file_path)
                 await manager.send_json({
-                    "type": "progress", "downloaded": tamanio, "total_size": tamanio, "speed_mbps": 0, "index": db_id, "state": "done"
+                    "type": "progress", "downloaded": tamanio, "total_size": tamanio, "speed_mbps": 0, "index": target_idx, "state": "done"
                 })
-                await manager.send_json({"type": "done", "index": db_id, "file_path": item.file_path})
-                await manager.send_json({"type": "status_change", "index": db_id, "state": "done", "file_path": item.file_path})
+                await manager.send_json({"type": "done", "index": target_idx, "file_path": item.file_path})
+                await manager.send_json({"type": "status_change", "index": target_idx, "state": "done", "file_path": item.file_path})
                 
         except (ConnectionError, OSError) as e:
             # Error de conexión — intentar reconectar y reportar
@@ -1190,13 +1192,13 @@ async def process_downloads(db_ids, custom_dir=""):
                 pass
             item.state = "error"
             database.update_download_state(db_id, "error")
-            await manager.send_json({"type": "error", "message": f"Error de conexión: {traducir_error_telegram(e)}. La sesión se reconectó automáticamente.", "index": db_id})
-            await manager.send_json({"type": "status_change", "index": db_id, "state": "error"})
+            await manager.send_json({"type": "error", "message": f"Error de conexión: {traducir_error_telegram(e)}. La sesión se reconectó automáticamente.", "index": target_idx})
+            await manager.send_json({"type": "status_change", "index": target_idx, "state": "error"})
         except Exception as e:
             item.state = "error"
             database.update_download_state(db_id, "error")
-            await manager.send_json({"type": "error", "message": traducir_error_telegram(e), "index": db_id})
-            await manager.send_json({"type": "status_change", "index": db_id, "state": "error"})
+            await manager.send_json({"type": "error", "message": traducir_error_telegram(e), "index": target_idx})
+            await manager.send_json({"type": "status_change", "index": target_idx, "state": "error"})
 
     download_mgr.is_running = False
     download_mgr.active_index = None
