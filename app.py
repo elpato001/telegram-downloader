@@ -169,14 +169,17 @@ class VerifyAuth(BaseModel):
     password: str = ""
 
 def formatear_nombre_con_fecha(filename: str, fecha_iso: str) -> str:
-    """Agrega la fecha de publicación entre paréntesis antes de la extensión del archivo."""
+    """Agrega la fecha y hora de publicación entre paréntesis antes de la extensión del archivo,
+    convertida a la hora local (DD-MM-YYYY - HH-MM)."""
     if not fecha_iso:
         return filename
     try:
         dt = datetime.fromisoformat(fecha_iso)
-        fecha_str = dt.strftime("%Y-%m-%d")
+        if dt.tzinfo is not None:
+            dt = dt.astimezone()
+        fecha_str = dt.strftime("%d-%m-%Y - %H-%M")
     except Exception:
-        fecha_str = str(fecha_iso)[:10]
+        fecha_str = str(fecha_iso)[:16].replace("T", " ")
     
     if not fecha_str or f"({fecha_str})" in filename:
         return filename
