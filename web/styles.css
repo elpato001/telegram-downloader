@@ -986,3 +986,14 @@ td:first-child, th:first-child {
 }
 
 
+/* Toast Notifications */
+.toast-container { position: fixed; bottom: 20px; right: 20px; display: flex; flex-direction: column; gap: 10px; z-index: 9999; pointer-events: none; }
+.toast { display: flex; align-items: center; background-color: white; border-radius: 6px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); padding: 12px 16px; min-width: 250px; max-width: 350px; transform: translateX(120%); transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.3s; pointer-events: auto; border-left: 4px solid #24a1de; }
+.toast.show { transform: translateX(0); }
+.toast.error { border-left-color: #d92d20; }
+.toast.success { border-left-color: #107c10; }
+.toast-logo { width: 24px; height: 24px; margin-right: 12px; border-radius: 4px; object-fit: cover; flex-shrink: 0; }
+.toast-content { flex: 1; }
+.toast-message { font-size: 13px; color: #333; line-height: 1.4; word-break: break-word; }
+.toast-close { background: none; border: none; color: #999; cursor: pointer; margin-left: 10px; font-size: 14px; padding: 2px; }
+.toast-close:hover { color: #333; }

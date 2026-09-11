@@ -6,7 +6,7 @@
     <title>Telegram Downloader</title>
     <link rel="icon" type="image/png" href="logo.png">
     <link href="https://fonts.googleapis.com/css2?family=Segoe+UI:wght@400;500;600&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="styles.css?v=1.2">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body>
@@ -105,7 +105,7 @@
                                     <td colspan="8" class="empty-state-cell">
                                         <i class="fa-solid fa-inbox empty-icon"></i>
                                         <div>No hay descargas en la lista.</div>
-                                        <div class="empty-subtitle">Abrí la pestaña <strong>"Capturador de Enlaces"</strong> para escanear y agregar descargas desde canales de Telegram.</div>
+                                        <div class="empty-subtitle">Abre la pestaña <strong>"Capturador de Enlaces"</strong> para escanear y agregar descargas desde canales de Telegram.</div>
                                     </td>
                                 </tr>
                             </tbody>
@@ -177,7 +177,7 @@
                                     <td colspan="6" class="empty-state-cell">
                                         <i class="fa-solid fa-folder-open empty-icon"></i>
                                         <div>El Capturador de Enlaces está vacío.</div>
-                                        <div class="empty-subtitle">Pegá uno o varios enlaces de canales de Telegram arriba y presioná <strong>"Escanear Enlace"</strong>. Cada canal se guardará como una carpeta independiente.</div>
+                                        <div class="empty-subtitle">Pega uno o varios enlaces de canales de Telegram arriba y presiona <strong>"Escanear Enlace"</strong>. Cada canal se guardará como una carpeta independiente.</div>
                                     </td>
                                 </tr>
                             </tbody>
@@ -325,7 +325,7 @@
                             <div style="font-size: 12px; font-weight: 600; color: #b7791f; margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
                                 <i class="fa-solid fa-shield-halved"></i> Contraseña de dos pasos (2FA) requerida:
                             </div>
-                            <p style="font-size: 11px; color: #666; margin-bottom: 8px;">Tu cuenta tiene protección 2FA activa. Ingresá tu contraseña para finalizar la conexión:</p>
+                            <p style="font-size: 11px; color: #666; margin-bottom: 8px;">Tu cuenta tiene protección 2FA activa. Ingresa tu contraseña para finalizar la conexión:</p>
                             <div style="display: flex; gap: 6px;">
                                 <input type="password" id="qrPasswordInput" placeholder="Contraseña de 2 pasos" class="modal-input" style="flex: 1; margin-top: 0; padding: 6px 8px;">
                                 <button type="button" class="btn primary-btn" id="btnSubmitQrPassword" style="white-space: nowrap; padding: 6px 14px;">Ingresar</button>
@@ -345,7 +345,7 @@
 
                 <!-- VISTA 2: INICIO POR NÚMERO TELEFÓNICO -->
                 <div id="sectionLoginPhone" class="login-section" style="display: none;">
-                    <p style="margin-bottom: 12px; font-size: 13px; color: #444;">Ingresá tu número telefónico para conectar con tu cuenta.</p>
+                    <p style="margin-bottom: 12px; font-size: 13px; color: #444;">Ingresa tu número telefónico para conectar con tu cuenta.</p>
                     
                     <div style="margin-bottom: 10px;">
                         <label for="countrySelect" style="font-size: 11px; font-weight: 600; color: #555; display: block; margin-bottom: 3px;">País:</label>
@@ -411,7 +411,7 @@
 
             <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
                 <div>
-                    <button class="btn" id="btnResetSession" style="font-size: 11px; padding: 5px 10px; background: #fff0f0; color: #c0392b; border: 1px solid #e8c4c4;" title="Eliminar la sesión guardada y empezar de cero. Usalo si te da error al iniciar sesión.">🗑️ Reiniciar sesión</button>
+                    <button class="btn" id="btnResetSession" style="font-size: 11px; padding: 5px 10px; background: #fff0f0; color: #c0392b; border: 1px solid #e8c4c4;" title="Eliminar la sesión guardada y empezar de cero. Úsalo si te da error al iniciar sesión.">🗑️ Reiniciar sesión</button>
                 </div>
                 <div style="display: flex; gap: 8px; align-items: center;">
                     <button class="btn" id="btnResendCode" style="display: none; font-size: 11px; padding: 5px 10px; background: #fff4ce; color: #795548; border: 1px solid #e0c97f;" title="Solicitar un nuevo código de verificación">🔄 Reenviar código</button>
@@ -540,7 +540,10 @@
         </div>
     </div>
 
+    <!-- Toast Notifications Container -->
+    <div id="toastContainer" class="toast-container"></div>
+
     <script src="qrcode.min.js"></script>
-    <script src="script.js"></script>
+    <script src="script.js?v=1.2"></script>
 </body>
 </html>

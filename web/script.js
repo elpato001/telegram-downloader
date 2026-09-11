@@ -1,3 +1,32 @@
+
+function showToast(message, type = 'error') {
+    const container = document.getElementById('toastContainer');
+    if (!container) return;
+    
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    
+    toast.innerHTML = `
+        <img src="logo.png" alt="Logo" class="toast-logo">
+        <div class="toast-content">
+            <div class="toast-message">${message}</div>
+        </div>
+        <button class="toast-close"><i class="fa-solid fa-xmark"></i></button>
+    `;
+    
+    container.appendChild(toast);
+    
+    setTimeout(() => toast.classList.add('show'), 10);
+    
+    const dismiss = () => {
+        toast.classList.remove('show');
+        setTimeout(() => toast.remove(), 300);
+    };
+    
+    toast.querySelector('.toast-close').addEventListener('click', dismiss);
+    setTimeout(dismiss, 5000);
+}
+
 const API_BASE = '/api';
 
 let allScannedVideos = [];
@@ -343,7 +372,7 @@ if (btnSubmitQrPassword) {
     btnSubmitQrPassword.addEventListener('click', async () => {
         const pwd = qrPasswordInput ? qrPasswordInput.value : '';
         if (!pwd) {
-            if (qrPasswordError) qrPasswordError.textContent = 'Ingresá tu contraseña de dos pasos.';
+            if (qrPasswordError) qrPasswordError.textContent = 'Ingresa tu contraseña de dos pasos.';
             return;
         }
         if (qrPasswordError) {
@@ -593,7 +622,7 @@ const COUNTRY_RULES = {
         min: 6,
         max: 15,
         example: '123456789',
-        hint: 'Ingresá el número de teléfono sin el 0 inicial (de 6 a 15 dígitos).'
+        hint: 'Ingresa el número de teléfono sin el 0 inicial (de 6 a 15 dígitos).'
     }
 };
 
@@ -743,7 +772,7 @@ function validateAndGetPhone() {
     }
     
     if (!code || code === '+') {
-        return { valid: false, error: 'Por favor ingresá o seleccioná un código de país válido (ej: +56, +54).' };
+        return { valid: false, error: 'Por favor ingresa o selecciona un código de país válido (ej: +56, +54).' };
     }
     
     const rule = getActiveCountryRule();
@@ -754,7 +783,7 @@ function validateAndGetPhone() {
     }
     
     if (!num) {
-        return { valid: false, error: `Por favor ingresá tu número telefónico para ${rule.name}.` };
+        return { valid: false, error: `Por favor ingresa tu número telefónico para ${rule.name}.` };
     }
     
     if (rule.min === rule.max) {
@@ -808,7 +837,7 @@ document.getElementById('btnLoginSubmit').addEventListener('click', async () => 
                 document.getElementById('authCode').style.display = 'block';
                 document.getElementById('btnResendCode').style.display = 'inline-block';
                 errEl.style.color = '#107c10';
-                errEl.textContent = '✅ Código enviado. Ingresá el código que recibiste en tu app de Telegram.';
+                errEl.textContent = '✅ Código enviado. Ingresa el código que recibiste en tu app de Telegram.';
             } else {
                 errEl.style.color = 'red';
                 errEl.textContent = data.error;
@@ -820,7 +849,7 @@ document.getElementById('btnLoginSubmit').addEventListener('click', async () => 
     } else {
         if (!code) {
             errEl.style.color = 'red';
-            errEl.textContent = 'Ingresá el código de verificación que recibiste en Telegram.';
+            errEl.textContent = 'Ingresa el código de verificación que recibiste en Telegram.';
             return;
         }
         errEl.style.color = '#0078d7';
@@ -1131,10 +1160,8 @@ btnScanSubmit.addEventListener('click', async () => {
             // Cambiar automáticamente a la pestaña del capturador para ver el paquete añadido
             switchMainTab('grabber');
             
-            scanError.style.display = 'block';
-            scanError.style.backgroundColor = '#e6fffa';
-            scanError.style.color = '#0d9488';
-            scanError.innerHTML = `✅ Paquete <strong>"${data.package_name}"</strong> añadido al Capturador con ${data.videos ? data.videos.length : 0} archivos.`;
+            scanError.style.display = 'none';
+            showToast(`✅ Paquete <strong>"${data.package_name}"</strong> añadido al Capturador con ${data.videos ? data.videos.length : 0} archivos.`, 'success');
             
             setTimeout(() => {
                 if (scanError.style.backgroundColor === 'rgb(230, 255, 250)') {
@@ -1144,16 +1171,12 @@ btnScanSubmit.addEventListener('click', async () => {
             
             channelLink.value = '';
         } else {
-            scanError.style.display = 'block';
-            scanError.textContent = 'Error: ' + data.error;
-            scanError.style.backgroundColor = '#fde7e9';
-            scanError.style.color = '#a80000';
+            scanError.style.display = 'none';
+            showToast('Error: ' + data.error, 'error');
         }
     } catch (e) {
-        scanError.style.display = 'block';
-        scanError.textContent = 'Error de red al conectar con el servidor.';
-        scanError.style.backgroundColor = '#fde7e9';
-        scanError.style.color = '#a80000';
+        scanError.style.display = 'none';
+            showToast('Error de red al conectar con el servidor.', 'error');
     } finally {
         btnScanSubmit.disabled = false;
     }
@@ -1188,7 +1211,7 @@ function renderGrabberTable() {
             <td colspan="6" class="empty-state-cell">
                 <i class="fa-solid fa-folder-open empty-icon"></i>
                 <div style="font-weight: 600; font-size: 14px; margin-bottom: 4px;">El Capturador de Enlaces está vacío</div>
-                <div class="empty-subtitle">Pegá un enlace de canal o mensaje de Telegram en la barra superior y hacé clic en "Escanear Enlace". Podés añadir múltiples canales y quedarán organizados aquí en carpetas hasta que decidas descargarlos o borrarlos.</div>
+                <div class="empty-subtitle">Pega un enlace de canal o mensaje de Telegram en la barra superior y haz clic en "Escanear Enlace". Puedes añadir múltiples canales y quedarán organizados aquí en carpetas hasta que decidas descargarlos o borrarlos.</div>
             </td>
         </tr>`;
         updateGrabberSelection();
@@ -1429,7 +1452,7 @@ function renderDescargasTable() {
             <td colspan="8" class="empty-state-cell">
                 <i class="fa-solid fa-inbox empty-icon"></i>
                 <div style="font-weight: 600; font-size: 14px; margin-bottom: 4px;">No hay descargas en la lista</div>
-                <div class="empty-subtitle">Abrí la pestaña <strong>"Capturador de Enlaces"</strong> para escanear y agregar descargas desde canales de Telegram.</div>
+                <div class="empty-subtitle">Abre la pestaña <strong>"Capturador de Enlaces"</strong> para escanear y agregar descargas desde canales de Telegram.</div>
             </td>
         </tr>`;
         updateDescargasSelection();
@@ -2190,7 +2213,7 @@ if (btnStartGrabberDownloads) {
         }
         
         if (itemsToDownload.length === 0) {
-            alert('No hay elementos seleccionados ni disponibles para descargar en el Capturador.');
+            showToast('No hay elementos seleccionados ni disponibles para descargar en el Capturador.', 'error');
             return;
         }
         
@@ -2234,10 +2257,10 @@ if (btnStartGrabberDownloads) {
                 await loadGrabberData();
                 await loadDownloadsData();
             } else {
-                alert('Error al iniciar descargas: ' + (data.error || 'Desconocido'));
+                showToast('Error al iniciar descargas: ' + (data.error || 'Desconocido'), 'error');
             }
         } catch (e) {
-            alert('Error de red al conectar con el servidor: ' + e.message);
+            showToast('Error de red al conectar con el servidor: ' + e.message, 'error');
         } finally {
             btnStartGrabberDownloads.disabled = false;
             btnStartGrabberDownloads.innerHTML = origHtml;
@@ -2248,7 +2271,7 @@ if (btnStartGrabberDownloads) {
 if (btnDeleteSelectedGrabber) {
     btnDeleteSelectedGrabber.addEventListener('click', async () => {
         if (selectedGrabberItems.size === 0) {
-            alert('No hay elementos seleccionados en el Capturador.');
+            showToast('No hay elementos seleccionados en el Capturador.', 'error');
             return;
         }
         if (!confirm(`¿Eliminar ${selectedGrabberItems.size} elemento(s) del capturador?`)) return;
@@ -2297,7 +2320,7 @@ window.handleRenameGrabberPackage = async function(event, pkgId, currentName) {
             await loadGrabberData();
         }
     } catch (e) {
-        alert("Error al renombrar carpeta: " + e.message);
+        showToast("Error al renombrar carpeta: " + e.message, 'error');
     }
 };
 
@@ -2311,7 +2334,7 @@ window.handleDownloadGrabberPackage = async function(event, pkgId) {
     
     const items = pkg.items.filter(it => isFormatAllowed(it.filename));
     if (items.length === 0) {
-        alert('Ningún archivo en este paquete coincide con los formatos activos.');
+        showToast('Ningún archivo en este paquete coincide con los formatos activos.', 'error');
         return;
     }
     
@@ -2346,7 +2369,7 @@ window.handleDownloadGrabberPackage = async function(event, pkgId) {
             await loadDownloadsData();
         }
     } catch (e) {
-        alert('Error: ' + e.message);
+        showToast('Error: ' + e.message, 'error');
     }
 };
 
@@ -2414,7 +2437,7 @@ window.handleDownloadSingleGrabberItem = async function(event, itemId) {
             await loadDownloadsData();
         }
     } catch (e) {
-        alert('Error: ' + e.message);
+        showToast('Error: ' + e.message, 'error');
     }
 };
 
@@ -2457,7 +2480,7 @@ if (btnClearCompleted) {
 if (btnDeleteSelectedDownloads) {
     btnDeleteSelectedDownloads.addEventListener('click', async () => {
         if (selectedDownloads.size === 0) {
-            alert('No hay descargas seleccionadas.');
+            showToast('No hay descargas seleccionadas.', 'error');
             return;
         }
         if (!confirm(`¿Eliminar ${selectedDownloads.size} descarga(s) del historial?`)) return;
