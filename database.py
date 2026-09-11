@@ -123,6 +123,19 @@ def init_db():
     except Exception as mig_err:
         pass
 
+    # Resetear cualquier descarga que haya quedado en 'downloading' tras cerrar la app a 'paused'
+    try:
+        conn.execute("UPDATE downloads SET state = 'paused' WHERE state = 'downloading'")
+    except Exception:
+        pass
+
+    conn.commit()
+
+
+def fix_interrupted_downloads():
+    """Si el servidor se cerró abruptamente mientras descargaba, pasar esas descargas a 'paused'."""
+    conn = _get_conn()
+    conn.execute("UPDATE downloads SET state = 'paused' WHERE state = 'downloading'")
     conn.commit()
 
 

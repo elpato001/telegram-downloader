@@ -124,6 +124,8 @@ async function checkStatus() {
             } else {
                 document.getElementById('userInfoPremium').style.display = 'none';
             }
+            loadDownloadsData();
+            loadGrabberData();
         } else {
             loginModal.style.display = 'flex';
             document.getElementById('userInfoGroup').style.display = 'none';
