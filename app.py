@@ -27,6 +27,7 @@ import database
 logger = logging.getLogger("telegram_downloader")
 
 app = FastAPI()
+app.mount("/assets", StaticFiles(directory="assets"), name="assets")
 client = TelegramClient(
     SESSION_NAME, API_ID, API_HASH,
     connection_retries=10,       # Reintentar conexión hasta 10 veces
