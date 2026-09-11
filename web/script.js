@@ -71,7 +71,15 @@ const btnPauseAll = document.getElementById('btnPauseAll');
 const btnResumeAll = document.getElementById('btnResumeAll');
 const btnStopAll = document.getElementById('btnStopAll');
 const selectAll = document.getElementById('selectAll');
-const scanError = document.getElementById('scanError');
+const customDirInput = document.getElementById('customDir');
+const chkIncludeDate = document.getElementById('chkIncludeDate');
+
+if (chkIncludeDate) {
+    chkIncludeDate.checked = localStorage.getItem('telegram_include_date') === 'true';
+    chkIncludeDate.addEventListener('change', () => {
+        localStorage.setItem('telegram_include_date', chkIncludeDate.checked);
+    });
+}
 
 let itemStates = {};
 let itemFilePaths = {};
@@ -1593,6 +1601,7 @@ btnDownload.addEventListener('click', async () => {
     if (selectedIds.length === 0) return;
     
     const customDir = customDirInput ? customDirInput.value.trim() : '';
+    const includeDate = chkIncludeDate ? chkIncludeDate.checked : false;
     
     selectedIds.forEach(idx => {
         itemStates[idx] = 'pending';
@@ -1604,7 +1613,7 @@ btnDownload.addEventListener('click', async () => {
     
     await fetch(`${API_BASE}/download`, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ indices: selectedIds, custom_dir: customDir })
+        body: JSON.stringify({ indices: selectedIds, custom_dir: customDir, include_date: includeDate })
     });
 });
 
@@ -1659,6 +1668,7 @@ window.handleToggleItem = async function(event, idx) {
         });
     } else {
         const customDir = customDirInput ? customDirInput.value.trim() : '';
+        const includeDate = chkIncludeDate ? chkIncludeDate.checked : false;
         itemStates[idx] = 'pending';
         updateRowUI(idx, 'pending');
         setGlobalButtonsState('downloading');
@@ -1666,7 +1676,7 @@ window.handleToggleItem = async function(event, idx) {
         await fetch(`${API_BASE}/download`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ indices: [idx], custom_dir: customDir })
+            body: JSON.stringify({ indices: [idx], custom_dir: customDir, include_date: includeDate })
         });
     }
 };

@@ -5,6 +5,7 @@ import sys
 import os
 import subprocess
 import logging
+from datetime import datetime
 from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
@@ -167,6 +168,26 @@ class VerifyAuth(BaseModel):
     phone_code_hash: str
     password: str = ""
 
+def formatear_nombre_con_fecha(filename: str, fecha_iso: str) -> str:
+    """Agrega la fecha de publicación entre paréntesis antes de la extensión del archivo."""
+    if not fecha_iso:
+        return filename
+    try:
+        dt = datetime.fromisoformat(fecha_iso)
+        fecha_str = dt.strftime("%Y-%m-%d")
+    except Exception:
+        fecha_str = str(fecha_iso)[:10]
+    
+    if not fecha_str or f"({fecha_str})" in filename:
+        return filename
+        
+    p = Path(filename)
+    stem, suffix = p.stem, p.suffix
+    if suffix:
+        return f"{stem} ({fecha_str}){suffix}"
+    else:
+        return f"{filename} ({fecha_str})"
+
 class QRPasswordAuth(BaseModel):
     password: str
 
@@ -177,6 +198,7 @@ class DownloadRequest(BaseModel):
     indices: list[int]
     custom_dir: str = ""
     is_resume: bool = False
+    include_date: bool = False
 
 class DownloadControlRequest(BaseModel):
     index: int | str = "all"
@@ -865,15 +887,19 @@ async def trigger_download(data: DownloadRequest):
         db_ids = []
         for idx in data.indices:
             video = current_videos_cache[idx]
+            filename = video["nombre"]
+            if data.include_date and video.get("fecha"):
+                filename = formatear_nombre_con_fecha(filename, video["fecha"])
+
             db_id = database.add_download(
                 message_id=video["id"],
                 entity_id=video.get("entity_id", str(video.get("carpeta", ""))),
-                filename=video["nombre"],
+                filename=filename,
                 total_size=video["tamanio"],
                 custom_dir=data.custom_dir,
                 file_path=""
             )
-            item = DownloadItem(idx, video["nombre"], video["tamanio"])
+            item = DownloadItem(idx, filename, video["tamanio"])
             item.db_id = db_id
             item.message_id = video["id"]
             item.entity_id = video.get("entity_id")
