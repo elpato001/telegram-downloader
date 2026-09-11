@@ -540,6 +540,24 @@
         </div>
     </div>
 
+    
+    <!-- Confirm Modal -->
+    <div class="modal-overlay" id="confirmModal" style="display: none; z-index: 10000;">
+        <div class="modal" style="width: 380px; max-width: 95vw; border-radius: 8px;">
+            <div class="modal-header" style="display: flex; align-items: center; gap: 8px; background: white; color: #333; border-bottom: none; padding-bottom: 0;">
+                <img src="logo.png" alt="Telegram Downloader" style="width: 20px; height: 20px; border-radius: 4px; object-fit: cover;">
+                <span style="font-weight: 600; font-size: 13px;">Telegram Downloader</span>
+            </div>
+            <div class="modal-body" style="padding: 15px 20px 25px; text-align: left;">
+                <p id="confirmModalMessage" style="font-size: 13px; color: #444; line-height: 1.4; margin: 0;"></p>
+            </div>
+            <div class="modal-footer" style="background: white; border-top: none; padding-top: 0; display: flex; justify-content: flex-end; gap: 10px;">
+                <button type="button" class="btn" id="btnConfirmNo" style="min-width: 80px; border-radius: 20px; background: #e5e5e5; border: none;">Cancelar</button>
+                <button type="button" class="btn primary-btn" id="btnConfirmYes" style="min-width: 80px; border-radius: 20px;">Aceptar</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Toast Notifications Container -->
     <div id="toastContainer" class="toast-container"></div>
 

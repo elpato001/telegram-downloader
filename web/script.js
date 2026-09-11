@@ -1,4 +1,34 @@
 
+function showConfirmDialog(message) {
+    return new Promise((resolve) => {
+        const modal = document.getElementById('confirmModal');
+        const msgEl = document.getElementById('confirmModalMessage');
+        const btnYes = document.getElementById('btnConfirmYes');
+        const btnNo = document.getElementById('btnConfirmNo');
+        
+        if (!modal || !msgEl || !btnYes || !btnNo) {
+            resolve(await showConfirmDialog(message));
+            return;
+        }
+        
+        msgEl.textContent = message;
+        modal.style.display = 'flex';
+        
+        const cleanup = () => {
+            modal.style.display = 'none';
+            btnYes.removeEventListener('click', onYes);
+            btnNo.removeEventListener('click', onNo);
+        };
+        
+        const onYes = () => { cleanup(); resolve(true); };
+        const onNo = () => { cleanup(); resolve(false); };
+        
+        btnYes.addEventListener('click', onYes);
+        btnNo.addEventListener('click', onNo);
+    });
+}
+
+
 function showToast(message, type = 'error') {
     const container = document.getElementById('toastContainer');
     if (!container) return;
@@ -169,7 +199,7 @@ async function checkStatus() {
 }
 
 document.getElementById('btnLogout').addEventListener('click', async () => {
-    if(confirm('¿Seguro que querés cerrar sesión?')) {
+    if(await showConfirmDialog('¿Seguro que quieres cerrar sesión?')) {
         stopQrPolling();
         await fetch(`${API_BASE}/auth/logout`, { method: 'POST' });
         checkStatus();
@@ -918,7 +948,7 @@ document.getElementById('btnResendCode').addEventListener('click', async () => {
 
 // Reiniciar sesión completamente (elimina el archivo de sesión)
 document.getElementById('btnResetSession').addEventListener('click', async () => {
-    if (!confirm('¿Reiniciar la sesión? Esto eliminará la sesión guardada y podrás iniciar con un número nuevo o código QR.\n\nUsá esto si la app te da error al intentar iniciar sesión.')) {
+    if (!await showConfirmDialog('¿Reiniciar la sesión? Esto eliminará la sesión guardada y podrás iniciar con un número nuevo o código QR.\n\nÚsalo si la app te da error al intentar iniciar sesión.')) {
         return;
     }
     
@@ -2274,7 +2304,7 @@ if (btnDeleteSelectedGrabber) {
             showToast('No hay elementos seleccionados en el Capturador.', 'error');
             return;
         }
-        if (!confirm(`¿Eliminar ${selectedGrabberItems.size} elemento(s) del capturador?`)) return;
+        if (!await showConfirmDialog(`¿Eliminar ${selectedGrabberItems.size} elemento(s) del capturador?`)) return;
         
         try {
             await fetch(`${API_BASE}/grabber/delete`, {
@@ -2293,7 +2323,7 @@ if (btnDeleteSelectedGrabber) {
 if (btnClearGrabber) {
     btnClearGrabber.addEventListener('click', async () => {
         if (grabberPackages.length === 0) return;
-        if (!confirm('¿Seguro que querés vaciar todos los paquetes y enlaces del Capturador?')) return;
+        if (!await showConfirmDialog('¿Seguro que quieres vaciar todos los paquetes y enlaces del Capturador?')) return;
         
         try {
             await fetch(`${API_BASE}/grabber/clear`, { method: 'POST' });
@@ -2375,7 +2405,7 @@ window.handleDownloadGrabberPackage = async function(event, pkgId) {
 
 window.handleDeleteGrabberPackage = async function(event, pkgId) {
     if (event) event.stopPropagation();
-    if (!confirm('¿Eliminar este paquete del capturador de enlaces?')) return;
+    if (!await showConfirmDialog('¿Eliminar este paquete del capturador de enlaces?')) return;
     try {
         await fetch(`${API_BASE}/grabber/delete`, {
             method: 'POST',
@@ -2483,7 +2513,7 @@ if (btnDeleteSelectedDownloads) {
             showToast('No hay descargas seleccionadas.', 'error');
             return;
         }
-        if (!confirm(`¿Eliminar ${selectedDownloads.size} descarga(s) del historial?`)) return;
+        if (!await showConfirmDialog(`¿Eliminar ${selectedDownloads.size} descarga(s) del historial?`)) return;
         
         try {
             await fetch(`${API_BASE}/downloads/delete`, {
@@ -2569,7 +2599,7 @@ window.handleTogglePackage = async function(event, pkgName) {
 
 window.handleDeletePackage = async function(event, pkgName) {
     if (event) event.stopPropagation();
-    if (!confirm(`¿Eliminar el paquete "${pkgName}" y todas sus descargas del historial?`)) return;
+    if (!await showConfirmDialog(`¿Eliminar el paquete "${pkgName}" y todas sus descargas del historial?`)) return;
     try {
         await fetch(`${API_BASE}/downloads/delete`, {
             method: 'POST',
