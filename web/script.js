@@ -7,7 +7,7 @@ function showConfirmDialog(message) {
         const btnNo = document.getElementById('btnConfirmNo');
         
         if (!modal || !msgEl || !btnYes || !btnNo) {
-            resolve(await showConfirmDialog(message));
+            resolve(window.confirm(message));
             return;
         }
         
