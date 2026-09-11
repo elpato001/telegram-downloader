@@ -35,7 +35,7 @@ body {
     overflow: hidden;
 }
 
-/* App Header & JDownloader Tabs */
+/* App Header & Tabs */
 .app-header {
     background: linear-gradient(180deg, #f7f7f7 0%, #e5e5e5 100%);
     border-bottom: 1px solid #b5b5b5;
@@ -114,11 +114,11 @@ body {
 }
 
 .jd-icon-descargas {
-    color: #107c10; /* Verde estilo JDownloader */
+    color: #107c10;
 }
 
 .jd-icon-grabber {
-    color: #0078d7; /* Azul estilo JDownloader */
+    color: #0078d7;
 }
 
 .jd-icon-options {
@@ -378,7 +378,7 @@ td:first-child, th:first-child {
     box-shadow: 0 1px 3px rgba(0,0,0,0.1);
 }
 
-/* Árbol de paquetes y carpetas estilo JDownloader */
+/* Árbol de paquetes y carpetas */
 .package-row {
     background: #eef3f9 !important;
     font-weight: 600;
@@ -423,7 +423,7 @@ td:first-child, th:first-child {
 }
 
 .folder-icon {
-    color: #eab308; /* Oro JDownloader */
+    color: #eab308; /* Oro */
     margin-right: 6px;
     font-size: 14px;
     vertical-align: middle;

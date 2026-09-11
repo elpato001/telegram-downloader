@@ -79,7 +79,7 @@ function getFileIconClass(filename) {
     return 'fa-regular fa-file icon-generic';
 }
 
-// Variables de estado del sistema estilo JDownloader
+// Variables de estado del sistema
 let currentMainTab = 'descargas'; // 'descargas' | 'grabber'
 let downloadsData = [];
 let grabberPackages = [];
@@ -951,7 +951,7 @@ document.getElementById('btnResetSession').addEventListener('click', async () =>
 });
 
 // ═════════════════════════════════════════════════════════════════════════
-// 2. SISTEMA DE PESTAÑAS ESTILO JDOWNLOADER
+// 2. SISTEMA DE PESTAÑAS
 // ═════════════════════════════════════════════════════════════════════════
 
 const tabDescargas = document.getElementById('tabDescargas');

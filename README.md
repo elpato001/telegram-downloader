@@ -1,7 +1,7 @@
 <div align="center">
   <img src="https://raw.githubusercontent.com/elpato001/telegram-downloader/main/assets/logo.png" alt="Telegram Downloader Logo" width="130" />
   <h1>Telegram Media Downloader</h1>
-  <p>Una aplicación moderna y completa para descargar juegos, videos, archivos comprimidos y documentos desde canales y grupos de Telegram (públicos o privados), con una interfaz web intuitiva inspirada en <strong>JDownloader</strong>.</p>
+  <p>Una aplicación moderna y completa para descargar juegos, videos, archivos comprimidos y documentos desde canales y grupos de Telegram (públicos o privados), con una interfaz web intuitiva, potente y organizada.</p>
 </div>
 
 ---
@@ -37,7 +37,7 @@ Conéctate de forma segura y sin necesidad de crear aplicaciones o tokens de Tel
 
 ## ✨ Características Principales
 
-- 🗂️ **Sistema de Pestañas estilo JDownloader:**
+- 🗂️ **Sistema de Pestañas Especializadas:**
   - **Pestaña "Capturador de Enlaces":** Escanea enlaces de distintos canales (públicos, privados `t.me/c/...` o mensajes individuales) y organízalos en paquetes antes de descargar.
   - **Pestaña "Descargas":** Administra la cola de descargas activas con control de velocidad y estado.
 - 📁 **Estructura de Guardado en Dos Niveles:**
@@ -51,7 +51,7 @@ Conéctate de forma segura y sin necesidad de crear aplicaciones o tokens de Tel
   - Al completarse la descarga al 100%, se renombra de manera automática e instantánea a su nombre original (`archivo.rar`).
 - 🌲 **Vista de Árbol Jerárquica (`[+] / [-]`):**
   - Filas de paquete expandibles y contraíbles.
-  - Las casillas de selección de archivos se alinean directamente en el subnivel guiado por líneas de árbol (`└──`), idéntico a JDownloader.
+  - Las casillas de selección de archivos se alinean directamente en el subnivel guiado por líneas de árbol (`└──`).
 - ⏯️ **Control Total de Descargas:**
   - Botones globales: **Reanudar Todo (`Play`)**, **Pausar Todo (`Pause`)**, **Detener Todo (`Stop`)** y **Limpiar Completadas**.
   - Control individual por archivo y por paquete.
