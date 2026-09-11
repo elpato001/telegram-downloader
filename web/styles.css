@@ -997,3 +997,15 @@ td:first-child, th:first-child {
 .toast-message { font-size: 13px; color: #333; line-height: 1.4; word-break: break-word; }
 .toast-close { background: none; border: none; color: #999; cursor: pointer; margin-left: 10px; font-size: 14px; padding: 2px; }
 .toast-close:hover { color: #333; }
+
+/* Custom Country Select */
+.custom-select-wrapper { position: relative; width: 100%; margin-top: 0; }
+.custom-select-trigger { display: flex; justify-content: space-between; align-items: center; padding: 6px 8px; font-size: 12px; background: white; border: 1px solid #a0a0a0; cursor: pointer; }
+.custom-select-trigger:focus { border-color: #24a1de; outline: none; }
+.custom-select-value { display: flex; align-items: center; gap: 8px; }
+.custom-select-value img { width: 20px; height: 14px; object-fit: cover; border-radius: 2px; border: 1px solid #eee; }
+.custom-select-options { position: absolute; top: 100%; left: 0; right: 0; background: white; border: 1px solid #a0a0a0; border-top: none; max-height: 200px; overflow-y: auto; z-index: 10; display: none; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+.custom-select-options.open { display: block; }
+.custom-option { display: flex; align-items: center; gap: 8px; padding: 6px 8px; font-size: 12px; cursor: pointer; }
+.custom-option:hover, .custom-option.selected { background: #e5f1fb; }
+.custom-option img { width: 20px; height: 14px; object-fit: cover; border-radius: 2px; border: 1px solid #eee; }

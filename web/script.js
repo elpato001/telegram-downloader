@@ -1,4 +1,112 @@
 
+const countriesData = [
+    { code: 'ar', name: 'Argentina (+54)', val: '+54' },
+    { code: 'bo', name: 'Bolivia (+591)', val: '+591' },
+    { code: 'br', name: 'Brasil (+55)', val: '+55' },
+    { code: 'cl', name: 'Chile (+56)', val: '+56' },
+    { code: 'co', name: 'Colombia (+57)', val: '+57' },
+    { code: 'cr', name: 'Costa Rica (+506)', val: '+506' },
+    { code: 'cu', name: 'Cuba (+53)', val: '+53' },
+    { code: 'ec', name: 'Ecuador (+593)', val: '+593' },
+    { code: 'sv', name: 'El Salvador (+503)', val: '+503' },
+    { code: 'es', name: 'España (+34)', val: '+34' },
+    { code: 'us', name: 'Estados Unidos / Canadá (+1)', val: '+1' },
+    { code: 'gt', name: 'Guatemala (+502)', val: '+502' },
+    { code: 'hn', name: 'Honduras (+504)', val: '+504' },
+    { code: 'mx', name: 'México (+52)', val: '+52' },
+    { code: 'ni', name: 'Nicaragua (+505)', val: '+505' },
+    { code: 'pa', name: 'Panamá (+507)', val: '+507' },
+    { code: 'py', name: 'Paraguay (+595)', val: '+595' },
+    { code: 'pe', name: 'Perú (+51)', val: '+51' },
+    { code: 'pr', name: 'Puerto Rico (+1787)', val: '+1787' },
+    { code: 'do', name: 'Rep. Dominicana (+1809)', val: '+1809' },
+    { code: 'uy', name: 'Uruguay (+598)', val: '+598' },
+    { code: 've', name: 'Venezuela (+58)', val: '+58' },
+    { code: 'de', name: 'Alemania (+49)', val: '+49' },
+    { code: 'fr', name: 'Francia (+33)', val: '+33' },
+    { code: 'it', name: 'Italia (+39)', val: '+39' },
+    { code: 'pt', name: 'Portugal (+351)', val: '+351' },
+    { code: 'gb', name: 'Reino Unido (+44)', val: '+44' },
+    { code: 'ru', name: 'Rusia (+7)', val: '+7' },
+    { code: 'un', name: 'Otro país (código manual)', val: '' }
+];
+
+function initCustomCountrySelect() {
+    const trigger = document.getElementById('customCountryTrigger');
+    const optionsContainer = document.getElementById('customCountryOptions');
+    const hiddenInput = document.getElementById('countrySelect');
+    const valueContainer = document.getElementById('customCountryValue');
+    const countryCodeInput = document.getElementById('countryCode');
+
+    if (!trigger || !optionsContainer) return;
+
+    // Render options
+    optionsContainer.innerHTML = '';
+    countriesData.forEach(c => {
+        const opt = document.createElement('div');
+        opt.className = 'custom-option';
+        if (c.val === hiddenInput.value) opt.classList.add('selected');
+        opt.dataset.value = c.val;
+        
+        let imgHtml = c.code === 'un' ? '<i class="fa-solid fa-globe" style="width:20px;text-align:center;color:#666;"></i>' : `<img src="../assets/banderas/${c.code}.png" alt="${c.code}">`;
+        
+        opt.innerHTML = `${imgHtml}<span>${c.name}</span>`;
+        
+        opt.addEventListener('click', () => {
+            // Update hidden input
+            hiddenInput.value = c.val;
+            
+            // Update UI
+            valueContainer.innerHTML = `${imgHtml}<span>${c.name}</span>`;
+            
+            // Update selection classes
+            optionsContainer.querySelectorAll('.custom-option').forEach(o => o.classList.remove('selected'));
+            opt.classList.add('selected');
+            
+            // Close dropdown
+            optionsContainer.classList.remove('open');
+            
+            // Trigger change logic
+            if (c.val) {
+                countryCodeInput.value = c.val;
+                countryCodeInput.dispatchEvent(new Event('input'));
+            }
+            hiddenInput.dispatchEvent(new Event('change'));
+        });
+        
+        optionsContainer.appendChild(opt);
+    });
+
+    trigger.addEventListener('click', () => {
+        optionsContainer.classList.toggle('open');
+    });
+
+    document.addEventListener('click', (e) => {
+        if (!document.getElementById('customCountryWrapper').contains(e.target)) {
+            optionsContainer.classList.remove('open');
+        }
+    });
+    
+    // Override hidden input setter to sync UI
+    const originalDescriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+    Object.defineProperty(hiddenInput, 'value', {
+        get: function() { return originalDescriptor.get.call(this); },
+        set: function(val) {
+            originalDescriptor.set.call(this, val);
+            const found = countriesData.find(c => c.val === val);
+            if (found) {
+                let imgHtml = found.code === 'un' ? '<i class="fa-solid fa-globe" style="width:20px;text-align:center;color:#666;"></i>' : `<img src="../assets/banderas/${found.code}.png" alt="${found.code}">`;
+                valueContainer.innerHTML = `${imgHtml}<span>${found.name}</span>`;
+                optionsContainer.querySelectorAll('.custom-option').forEach(o => {
+                    o.classList.toggle('selected', o.dataset.value === val);
+                });
+            }
+        }
+    });
+}
+document.addEventListener('DOMContentLoaded', initCustomCountrySelect);
+
+
 function showConfirmDialog(message) {
     return new Promise((resolve) => {
         const modal = document.getElementById('confirmModal');
