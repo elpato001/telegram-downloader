@@ -35,11 +35,41 @@ Conéctate de forma segura y sin necesidad de crear aplicaciones o tokens de Tel
 
 ---
 
+## 🆕 Novedades de la Versión 2.0.0 (v2.0.0)
+
+- 🤖 **Pestaña "Automatizaciones" (Monitoreo y Auto-Descarga en Tiempo Real):**
+  - Añade canales o grupos de Telegram para monitorizarlos continuamente en segundo plano.
+  - Los nuevos archivos publicados se capturan y descargan automáticamente sin requerir intervención manual.
+  - **Sincronización Offline Inteligente:** Al abrir la aplicación, detecta automáticamente los mensajes o publicaciones realizadas mientras la app estuvo apagada, garantizando cero pérdidas de contenido.
+  - **Filtros por Tipo de Archivo:** Elige qué descargar por canal (Solo Videos, Fotos, Multimedia, Música/Audio, Archivos Comprimidos/ISOs, Documentos o extensiones personalizadas).
+  - **Organización Flexible de Carpetas:** Modos por `Canal/Fecha`, `Solo Canal` o `Plano` (sin subcarpetas).
+  - Descarga opcional del historial existente al agregar un nuevo canal.
+  - Notificaciones toast personalizadas al completar lotes de descargas automatizadas.
+
+- 📁 **Explorador de Carpetas Web con Creación Integrada:**
+  - Botón **"Nueva carpeta"** directamente dentro del diálogo web para crear directorios de destino al instante.
+  - Compatibilidad completa multiplataforma con Windows y Linux / Synology DSM.
+
+- 🐳 **Soporte Oficial para Docker y Synology DSM (Container Manager):**
+  - Archivos `Dockerfile`, `docker-compose.yml` y `Caddyfile` listos para desplegar en un solo clic.
+  - Autenticación básica segura integrada con Caddy para acceso remoto protegido.
+  - Guía detallada paso a paso en [RELEASE_SYNOLOGY.md](RELEASE_SYNOLOGY.md).
+
+- ⚡ **Mejoras de Rendimiento y Estabilidad:**
+  - Descarga acelerada por chunks concurrentes para archivos grandes.
+  - Keepalive periódico optimizado para mantener la sesión de Telegram siempre activa y sin desconexiones.
+  - Corrección de visibilidad de la consola en Windows (`iniciar.bat`).
+
+---
+
 ## ✨ Características Principales
 
-- 🗂️ **Sistema de Pestañas Especializadas:**
+- 🗂️ **Sistema de 3 Pestañas Especializadas:**
   - **Pestaña "Capturador de Enlaces":** Escanea enlaces de distintos canales (públicos, privados `t.me/c/...` o mensajes individuales) y organízalos en paquetes antes de descargar.
-  - **Pestaña "Descargas":** Administra la cola de descargas activas con control de velocidad y estado.
+  - **Pestaña "Descargas":** Administra la cola de descargas activas con control de velocidad en tiempo real, pausas y reanudación.
+  - **Pestaña "Automatizaciones":** Monitorea canales en segundo plano y descarga automáticamente nuevos archivos que se publiquen con filtros y modos de organización personalizados.
+- 🤖 **Auto-Descarga Autónoma de Canales:**
+  - Monitoreo en tiempo real de canales favoritos con filtros de formato y sincronización tras reconectar.
 - 📁 **Estructura de Guardado en Dos Niveles:**
   - Guarda automáticamente los archivos organizados en disco en dos subniveles limpios:
     $$\text{Ruta de Descarga} \longrightarrow \text{Canal de Telegram} \longrightarrow \text{Carpeta Contenedora} \longrightarrow \text{archivo.ext}$$
@@ -61,7 +91,7 @@ Conéctate de forma segura y sin necesidad de crear aplicaciones o tokens de Tel
 - 📅 **Inclusión Opcional de Fecha:**
   - Agrega la fecha y hora de publicación de Telegram al nombre del archivo (`DD-MM-YYYY - HH-MM`).
 - 💾 **Persistencia Completa con SQLite:**
-  - Tus enlaces escaneados y tu historial de descargas se guardan en una base de datos local (`downloads.db`), manteniéndose intactos incluso si cierras la app o reinicias tu equipo.
+  - Tus enlaces escaneados, configuraciones, automatizaciones e historial de descargas se guardan en una base de datos local (`downloads.db`), manteniéndose intactos incluso si cierras la app o reinicias tu equipo.
 - 🚀 **Descarga Paralela Acelerada:**
   - Descarga simultánea por bloques para maximizar el ancho de banda de tu conexión.
 - 🔒 **100% Privado y Seguro:**
@@ -71,7 +101,7 @@ Conéctate de forma segura y sin necesidad de crear aplicaciones o tokens de Tel
 
 ## 🚀 ¿Cómo usar la aplicación?
 
-No requiere configuraciones complejas ni comandos avanzados:
+### Opción A: Ejecución en Windows (Recomendada para PC)
 
 1. **Descargar el proyecto:**
    - Haz clic en el botón verde **Code** (arriba a la derecha en GitHub) y selecciona **[Download ZIP](https://github.com/elpato001/telegram-downloader/archive/refs/heads/main.zip)**, o clona el repositorio con:
@@ -84,6 +114,12 @@ No requiere configuraciones complejas ni comandos avanzados:
    - Haz doble clic en el archivo **`iniciar.bat`**. 
    - El script verificará las dependencias necesarias y abrirá automáticamente la aplicación en tu navegador (`http://localhost:8000`).
 
+### Opción B: Despliegue en Synology DSM / Servidores Docker
+
+Para ejecutar en un NAS Synology o servidor con Docker:
+- Consulta la guía detallada: **[Guía de Instalación para Synology DSM (Container Manager)](RELEASE_SYNOLOGY.md)**.
+- Incluye `docker-compose.yml` y configuración con proxy inverso `Caddy` protegida por contraseña.
+
 ---
 
 ## 📱 Guía Rápida de Uso
@@ -94,19 +130,21 @@ No requiere configuraciones complejas ni comandos avanzados:
    - En la pestaña **Capturador de Enlaces**, pega el enlace del canal, grupo o mensaje (ej: `https://t.me/nombre_canal` o `https://t.me/c/12345678/90`) y haz clic en **Escanear Enlace**.
    - Puedes escanear varios canales o enlaces y todos quedarán organizados en paquetes.
 3. **Configurar Destino y Formatos:**
-   - En la barra inferior, haz clic en **Examinar...** para seleccionar la carpeta raíz donde deseas descargar.
+   - En la barra inferior, haz clic en **Examinar...** para seleccionar o crear la carpeta donde deseas descargar.
    - Ajusta los formatos permitidos haciendo clic en **[Editar]** si solo deseas descargar extensiones específicas.
-4. **Iniciar Descargas:**
-   - Selecciona las casillas de los archivos que desees (o deja sin marcar para descargar todo el paquete) y pulsa **Iniciar Descargas**.
+4. **Automatizaciones (Opcional):**
+   - Ve a la pestaña **Automatizaciones**, ingresa el enlace de un canal que quieras monitorizar continuamente, define la carpeta de destino, filtros de formato y haz clic en **Añadir Canal**.
+5. **Iniciar Descargas:**
+   - Selecciona las casillas de los archivos que desees y pulsa **Iniciar Descargas**.
    - La aplicación pasará automáticamente a la pestaña **Descargas** donde verás el avance en tiempo real.
 
 ---
 
 ## 📋 Requisitos Previos
 
-- **Windows 10 / 11**
+- **Windows 10 / 11** o **Linux / Docker (Synology NAS)**
 - **Python 3.10 o superior** instalado ([Descargar Python](https://www.python.org/downloads/)).
-  *(Asegúrate de marcar la casilla **"Add Python to PATH"** durante la instalación).*
+  *(En Windows, asegúrate de marcar la casilla **"Add Python to PATH"** durante la instalación).*
 
 ---
 

@@ -9,6 +9,7 @@ Uso: python downloader.py
 
 import os
 import sys
+import logging
 import asyncio
 import time
 from pathlib import Path
@@ -51,6 +52,7 @@ from config import (
     VIDEO_EXTENSIONS,
 )
 
+logger = logging.getLogger("telegram_downloader")
 
 # ─── Utilidades ───────────────────────────────────────────────────────
 
@@ -160,12 +162,143 @@ def obtener_nombre_archivo(message) -> str | None:
     return None
 
 
+def extraer_info_archivo(message) -> tuple[str | None, int, any]:
+    """
+    Extrae el nombre del archivo, su tamaño en bytes y el objeto multimedia de un mensaje de Telegram.
+    Soporta documentos, videos, audios y fotos (MessageMediaPhoto), ignorando stickers y emojis animados.
+    Retorna: (nombre_archivo, tamanio_bytes, media_obj) o (None, 0, None) si no hay contenido válido.
+    """
+    if not message or not getattr(message, 'media', None):
+        return None, 0, None
+
+    # Caso 1: Document (videos, audios, archivos subidos como documentos)
+    if getattr(message, 'document', None):
+        doc = message.document
+        attrs = getattr(doc, 'attributes', [])
+        # Ignorar stickers y emojis animados
+        if any(isinstance(a, (DocumentAttributeSticker, DocumentAttributeCustomEmoji)) for a in attrs):
+            return None, 0, None
+
+        nombre = obtener_nombre_archivo(message)
+        if not nombre:
+            if getattr(message, 'video', None):
+                nombre = f"video_{message.id}.mp4"
+            elif getattr(message, 'audio', None) or getattr(message, 'voice', None):
+                nombre = f"audio_{message.id}.mp3"
+            else:
+                nombre = f"archivo_{message.id}"
+                mime = getattr(doc, 'mime_type', '') or ''
+                if '/' in mime:
+                    ext = mime.split('/')[-1].lower()
+                    if ext in ('pdf', 'zip', 'rar', 'tar', 'gz', '7z', 'apk', 'epub', 'mp3', 'mp4', 'mkv', 'png', 'jpg', 'jpeg'):
+                        nombre = f"archivo_{message.id}.{ext}"
+
+        tamanio = doc.size or 0
+        return nombre, tamanio, doc
+
+    # Caso 2: Foto (MessageMediaPhoto)
+    if getattr(message, 'photo', None):
+        photo = message.photo
+        tamanio = 0
+        for s in getattr(photo, 'sizes', []):
+            if hasattr(s, 'sizes') and s.sizes:
+                tamanio = max(tamanio, max(s.sizes))
+            elif hasattr(s, 'size'):
+                tamanio = max(tamanio, s.size)
+            elif hasattr(s, 'bytes'):
+                tamanio = max(tamanio, len(s.bytes))
+
+        if message.text:
+            caracteres_validos = " -_()[]"
+            nombre_limpio = "".join(c for c in message.text if c.isalnum() or c in caracteres_validos).strip()[:60]
+            if nombre_limpio:
+                nombre = f"{nombre_limpio} ({message.id}).jpg"
+            else:
+                nombre = f"foto_{message.id}.jpg"
+        else:
+            nombre = f"foto_{message.id}.jpg"
+
+        return nombre, tamanio, photo
+
+    return None, 0, None
+
+
 def es_video(nombre_archivo: str) -> bool:
     """Verifica si un archivo es un video basándose en su extensión."""
     if not nombre_archivo:
         return False
     ext = Path(nombre_archivo).suffix.lower()
     return ext in VIDEO_EXTENSIONS
+
+
+def es_tipo_archivo_permitido(nombre: str, message=None, file_types: str = "all") -> bool:
+    """
+    Determina si un archivo cumple con el filtro de tipo especificado.
+    Soporta:
+      - 'all': Todos los archivos
+      - 'videos': Solo videos
+      - 'photos': Solo fotos / imágenes
+      - 'media': Videos y fotos
+      - 'audio': Audio / música
+      - 'archives': Archivos comprimidos e imágenes de disco
+      - 'docs': Documentos
+      - 'custom:...': Extensiones personalizadas separadas por coma
+    """
+    if not file_types or file_types == "all":
+        return True
+
+    ft = file_types.strip().lower()
+    nombre_lower = (nombre or "").lower()
+
+    if ft == "videos":
+        if message and getattr(message, 'video', None):
+            return True
+        return nombre_lower.endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm', '.flv', '.wmv', '.ts', '.m4v', '.3gp', '.mpg', '.mpeg'))
+
+    if ft == "photos":
+        if message and getattr(message, 'photo', None):
+            return True
+        return nombre_lower.endswith(('.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tiff'))
+
+    if ft == "media":
+        if message and (getattr(message, 'video', None) or getattr(message, 'photo', None)):
+            return True
+        return nombre_lower.endswith((
+            '.mp4', '.mkv', '.avi', '.mov', '.webm', '.flv', '.wmv', '.ts', '.m4v', '.3gp',
+            '.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tiff'
+        ))
+
+    if ft == "audio":
+        if message and (getattr(message, 'audio', None) or getattr(message, 'voice', None)):
+            return True
+        return nombre_lower.endswith(('.mp3', '.flac', '.wav', '.m4a', '.aac', '.ogg', '.opus', '.alac', '.wma'))
+
+    if ft == "archives":
+        return nombre_lower.endswith((
+            '.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.xz', '.z01', '.z02',
+            '.part1.rar', '.part2.rar', '.iso', '.chd', '.cso', '.bin', '.cue', '.pkg', '.nsp', '.xci'
+        ))
+
+    if ft == "docs":
+        return nombre_lower.endswith(('.pdf', '.epub', '.cbr', '.cbz', '.txt', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx'))
+
+    if ft.startswith("custom:"):
+        exts_raw = ft[len("custom:"):].split(',')
+        exts = [e.strip().lower() if e.strip().startswith('.') else f".{e.strip().lower()}" for e in exts_raw if e.strip()]
+        if not exts:
+            return True
+        return nombre_lower.endswith(tuple(exts))
+
+    # Tratar cualquier valor restante como lista de extensiones separadas por coma
+    # (ej: ".jpg, .png" o ".rar" o "jpg, png")
+    exts_raw = ft.split(',')
+    exts = [e.strip().lower() if e.strip().startswith('.') else f".{e.strip().lower()}" for e in exts_raw if e.strip()]
+    if exts:
+        return nombre_lower.endswith(tuple(exts))
+
+    # Si file_types tiene un valor pero no se pudo parsear, rechazar por seguridad
+    logger.warning(f"[Filtro] file_types no reconocido: '{file_types}' — rechazando archivo '{nombre}'")
+    return False
 
 
 def limpiar_pantalla():

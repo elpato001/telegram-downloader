@@ -137,32 +137,51 @@ function showConfirmDialog(message) {
 }
 
 
-function showToast(message, type = 'error') {
+function showToast(message, type = 'error', duration = 9000, title = '') {
     const container = document.getElementById('toastContainer');
     if (!container) return;
     
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
     
+    const defaultTitles = {
+        success: 'Éxito',
+        error: 'Aviso',
+        info: 'Información',
+        warning: 'Atención'
+    };
+    const toastTitle = title || defaultTitles[type] || '';
+    
+    const iconMap = {
+        success: 'fa-circle-check',
+        error: 'fa-circle-exclamation',
+        info: 'fa-circle-info',
+        warning: 'fa-triangle-exclamation'
+    };
+    const iconClass = iconMap[type] || 'fa-bell';
+    
     toast.innerHTML = `
         <img src="logo.png" alt="Logo" class="toast-logo">
         <div class="toast-content">
+            ${toastTitle ? `<div class="toast-title"><i class="fa-solid ${iconClass}"></i> ${toastTitle}</div>` : ''}
             <div class="toast-message">${message}</div>
         </div>
-        <button class="toast-close"><i class="fa-solid fa-xmark"></i></button>
+        <button class="toast-close" title="Cerrar"><i class="fa-solid fa-xmark"></i></button>
     `;
     
     container.appendChild(toast);
     
     setTimeout(() => toast.classList.add('show'), 10);
     
+    let timer = null;
     const dismiss = () => {
+        if (timer) clearTimeout(timer);
         toast.classList.remove('show');
-        setTimeout(() => toast.remove(), 300);
+        setTimeout(() => toast.remove(), 350);
     };
     
     toast.querySelector('.toast-close').addEventListener('click', dismiss);
-    setTimeout(dismiss, 5000);
+    timer = setTimeout(dismiss, duration);
 }
 
 const API_BASE = '/api';
@@ -276,7 +295,7 @@ if (chkIncludeDate) {
 }
 
 // 1. App Init
-async function checkStatus() {
+async function checkStatus(retryCount = 0) {
     try {
         const res = await fetch(`${API_BASE}/status`);
         const data = await res.json();
@@ -291,6 +310,7 @@ async function checkStatus() {
             } else {
                 document.getElementById('userInfoPremium').style.display = 'none';
             }
+            connectWebSocket();
             loadDownloadsData();
             loadGrabberData();
         } else {
@@ -302,7 +322,12 @@ async function checkStatus() {
             }
         }
     } catch (e) {
-        console.error("Error", e);
+        if (retryCount < 15) {
+            // Si el servidor uvicorn está terminando de iniciar, reintentar automáticamente
+            setTimeout(() => checkStatus(retryCount + 1), 1000);
+        } else {
+            console.error("No se pudo conectar con el servidor tras varios reintentos:", e);
+        }
     }
 }
 
@@ -1125,13 +1150,17 @@ document.getElementById('btnResetSession').addEventListener('click', async () =>
 
 const tabDescargas = document.getElementById('tabDescargas');
 const tabGrabber = document.getElementById('tabGrabber');
+const tabAuto = document.getElementById('tabAuto');
 const viewDescargas = document.getElementById('viewDescargas');
 const viewGrabber = document.getElementById('viewGrabber');
+const viewAuto = document.getElementById('viewAuto');
 const badgeDescargasCount = document.getElementById('badgeDescargasCount');
 const badgeGrabberCount = document.getElementById('badgeGrabberCount');
 
 function switchMainTab(tabName) {
     currentMainTab = tabName;
+    const bottomInfoPanel = document.getElementById('bottomInfoPanel');
+    const bottomBarConfig = document.getElementById('bottomBarConfig');
     const infoDescargasGroup = document.getElementById('infoDescargasGroup');
     const infoGrabberGroup = document.getElementById('infoGrabberGroup');
     const statusDescargasGroup = document.getElementById('statusDescargasGroup');
@@ -1142,9 +1171,13 @@ function switchMainTab(tabName) {
     if (tabName === 'descargas') {
         if (tabDescargas) tabDescargas.classList.add('active');
         if (tabGrabber) tabGrabber.classList.remove('active');
+        if (tabAuto) tabAuto.classList.remove('active');
         if (viewDescargas) viewDescargas.style.display = 'flex';
         if (viewGrabber) viewGrabber.style.display = 'none';
+        if (viewAuto) viewAuto.style.display = 'none';
 
+        if (bottomInfoPanel) bottomInfoPanel.style.display = 'flex';
+        if (bottomBarConfig) bottomBarConfig.style.display = 'flex';
         if (infoDescargasGroup) infoDescargasGroup.style.display = 'flex';
         if (infoGrabberGroup) infoGrabberGroup.style.display = 'none';
         if (statusDescargasGroup) statusDescargasGroup.style.display = 'flex';
@@ -1156,9 +1189,13 @@ function switchMainTab(tabName) {
     } else if (tabName === 'grabber') {
         if (tabDescargas) tabDescargas.classList.remove('active');
         if (tabGrabber) tabGrabber.classList.add('active');
+        if (tabAuto) tabAuto.classList.remove('active');
         if (viewDescargas) viewDescargas.style.display = 'none';
         if (viewGrabber) viewGrabber.style.display = 'flex';
+        if (viewAuto) viewAuto.style.display = 'none';
 
+        if (bottomInfoPanel) bottomInfoPanel.style.display = 'flex';
+        if (bottomBarConfig) bottomBarConfig.style.display = 'flex';
         if (infoDescargasGroup) infoDescargasGroup.style.display = 'none';
         if (infoGrabberGroup) infoGrabberGroup.style.display = 'flex';
         if (statusDescargasGroup) statusDescargasGroup.style.display = 'none';
@@ -1167,11 +1204,30 @@ function switchMainTab(tabName) {
         if (statusPackagesGrabber) statusPackagesGrabber.style.display = 'inline';
 
         loadGrabberData();
+    } else if (tabName === 'auto') {
+        if (tabDescargas) tabDescargas.classList.remove('active');
+        if (tabGrabber) tabGrabber.classList.remove('active');
+        if (tabAuto) tabAuto.classList.add('active');
+        if (viewDescargas) viewDescargas.style.display = 'none';
+        if (viewGrabber) viewGrabber.style.display = 'none';
+        if (viewAuto) viewAuto.style.display = 'flex';
+
+        if (bottomInfoPanel) bottomInfoPanel.style.display = 'none';
+        if (bottomBarConfig) bottomBarConfig.style.display = 'none';
+        if (infoDescargasGroup) infoDescargasGroup.style.display = 'none';
+        if (infoGrabberGroup) infoGrabberGroup.style.display = 'none';
+        if (statusDescargasGroup) statusDescargasGroup.style.display = 'none';
+        if (statusGrabberGroup) statusGrabberGroup.style.display = 'none';
+        if (statusSpeed) statusSpeed.style.display = 'inline';
+        if (statusPackagesGrabber) statusPackagesGrabber.style.display = 'none';
+        
+        loadAutoChannels();
     }
 }
 
 if (tabDescargas) tabDescargas.addEventListener('click', () => switchMainTab('descargas'));
 if (tabGrabber) tabGrabber.addEventListener('click', () => switchMainTab('grabber'));
+if (tabAuto) tabAuto.addEventListener('click', () => switchMainTab('auto'));
 
 // ═════════════════════════════════════════════════════════════════════════
 // 3. CARGA Y GESTIÓN DE DATOS DEL CAPTURADOR DE ENLACES
@@ -1891,22 +1947,97 @@ const btnGoToPath = document.getElementById('btnGoToPath');
 const folderList = document.getElementById('folderList');
 const folderSelectedDisplay = document.getElementById('folderSelectedDisplay');
 const btnClassicWinDialog = document.getElementById('btnClassicWinDialog');
+const btnNewFolderModal = document.getElementById('btnNewFolderModal');
+const btnNewFolderModalBottom = document.getElementById('btnNewFolderModalBottom');
+const newFolderRow = document.getElementById('newFolderRow');
+const newFolderNameInput = document.getElementById('newFolderNameInput');
+const btnConfirmNewFolder = document.getElementById('btnConfirmNewFolder');
+const btnCancelNewFolder = document.getElementById('btnCancelNewFolder');
 
 let pickerCurrentPath = '';
 let pickerParentPath = null;
+let folderPickerCallback = null;
 
-async function openFolderPicker(initialPath = '') {
+function showNewFolderInput() {
+    if (!newFolderRow || !newFolderNameInput) return;
+    newFolderRow.style.display = 'flex';
+    newFolderNameInput.value = 'Nueva carpeta';
+    newFolderNameInput.focus();
+    newFolderNameInput.select();
+}
+
+function hideNewFolderInput() {
+    if (!newFolderRow) return;
+    newFolderRow.style.display = 'none';
+    if (newFolderNameInput) newFolderNameInput.value = '';
+}
+
+async function createNewFolder() {
+    if (!newFolderNameInput) return;
+    const folderName = newFolderNameInput.value.trim();
+    if (!folderName) {
+        showToast("Debes ingresar un nombre para la carpeta.", "error");
+        newFolderNameInput.focus();
+        return;
+    }
+
+    if (!pickerCurrentPath) {
+        showToast("No hay una ruta actual seleccionada.", "error");
+        return;
+    }
+
+    const origBtnHtml = btnConfirmNewFolder ? btnConfirmNewFolder.innerHTML : '';
+    if (btnConfirmNewFolder) {
+        btnConfirmNewFolder.disabled = true;
+        btnConfirmNewFolder.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Creando...';
+    }
+
+    try {
+        const res = await fetch(`${API_BASE}/create_dir`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                parent_dir: pickerCurrentPath,
+                folder_name: folderName
+            })
+        });
+        const data = await res.json();
+        if (data.success) {
+            showToast(data.message || `Carpeta "${folderName}" creada exitosamente.`, "success");
+            hideNewFolderInput();
+            // Cargar directamente la nueva carpeta para que quede seleccionada
+            await loadDirectory(data.path);
+        } else {
+            showToast(data.error || "No se pudo crear la carpeta.", "error");
+            newFolderNameInput.focus();
+        }
+    } catch (e) {
+        showToast(`Error de conexión al crear carpeta: ${e.message}`, "error");
+    } finally {
+        if (btnConfirmNewFolder) {
+            btnConfirmNewFolder.disabled = false;
+            btnConfirmNewFolder.innerHTML = origBtnHtml;
+        }
+    }
+}
+
+async function openFolderPicker(initialPath = '', onSelect = null) {
     if (!folderPickerModal) return;
+    folderPickerCallback = onSelect;
     folderPickerModal.style.display = 'flex';
+    hideNewFolderInput();
     const startPath = initialPath || (customDirInput ? customDirInput.value.trim() : '');
     await loadDirectory(startPath);
 }
 
 function closeFolderPicker() {
+    folderPickerCallback = null;
+    hideNewFolderInput();
     if (folderPickerModal) folderPickerModal.style.display = 'none';
 }
 
 async function loadDirectory(targetPath = '') {
+    hideNewFolderInput();
     if (!folderList) return;
     folderList.innerHTML = '<div style="padding: 20px; text-align: center; color: #888; font-size: 11px;"><i class="fa-solid fa-spinner fa-spin"></i> Cargando carpetas...</div>';
     
@@ -2036,9 +2167,13 @@ if (btnFolderUp) {
 
 if (btnConfirmFolderPicker) {
     btnConfirmFolderPicker.addEventListener('click', () => {
-        if (pickerCurrentPath && customDirInput) {
-            customDirInput.value = pickerCurrentPath;
-            localStorage.setItem('telegram_download_dir', pickerCurrentPath);
+        if (pickerCurrentPath) {
+            if (typeof folderPickerCallback === 'function') {
+                folderPickerCallback(pickerCurrentPath);
+            } else if (customDirInput) {
+                customDirInput.value = pickerCurrentPath;
+                localStorage.setItem('telegram_download_dir', pickerCurrentPath);
+            }
         }
         closeFolderPicker();
     });
@@ -2058,10 +2193,12 @@ if (btnClassicWinDialog) {
             const data = await res.json();
             if (data && data.path) {
                 pickerCurrentPath = data.path;
-                if (customDirInput) {
+                if (typeof folderPickerCallback === 'function') {
+                    folderPickerCallback(data.path);
+                } else if (customDirInput) {
                     customDirInput.value = data.path;
+                    localStorage.setItem('telegram_download_dir', data.path);
                 }
-                localStorage.setItem('telegram_download_dir', data.path);
                 closeFolderPicker();
             }
         } catch (e) {
@@ -2076,6 +2213,46 @@ if (btnClassicWinDialog) {
 if (folderPickerModal) {
     folderPickerModal.addEventListener('click', (e) => {
         if (e.target === folderPickerModal) closeFolderPicker();
+    });
+}
+
+if (btnNewFolderModal) {
+    btnNewFolderModal.addEventListener('click', () => {
+        if (newFolderRow && newFolderRow.style.display === 'flex') {
+            hideNewFolderInput();
+        } else {
+            showNewFolderInput();
+        }
+    });
+}
+
+if (btnNewFolderModalBottom) {
+    btnNewFolderModalBottom.addEventListener('click', () => {
+        if (newFolderRow && newFolderRow.style.display === 'flex') {
+            hideNewFolderInput();
+        } else {
+            showNewFolderInput();
+        }
+    });
+}
+
+if (btnCancelNewFolder) {
+    btnCancelNewFolder.addEventListener('click', hideNewFolderInput);
+}
+
+if (btnConfirmNewFolder) {
+    btnConfirmNewFolder.addEventListener('click', createNewFolder);
+}
+
+if (newFolderNameInput) {
+    newFolderNameInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            createNewFolder();
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            hideNewFolderInput();
+        }
     });
 }
 
@@ -2099,6 +2276,7 @@ const formatsCount = document.getElementById('formatsCount');
 
 let tempActiveFormats = [];
 let tempAcceptAll = false;
+let formatsModalCallback = null;
 
 function updateFormatsSummaryUI() {
     if (!formatsSummary) return;
@@ -2155,9 +2333,17 @@ function applyFormatFilter() {
     updateSelection();
 }
 
-function openFormatsModal() {
-    tempActiveFormats = [...activeFormats];
-    tempAcceptAll = acceptAllFormats;
+function openFormatsModal(customAcceptAll = null, customFormats = null, onSave = null) {
+    if (typeof onSave === 'function') {
+        formatsModalCallback = onSave;
+        tempAcceptAll = customAcceptAll !== null ? customAcceptAll : false;
+        tempActiveFormats = Array.isArray(customFormats) ? [...customFormats] : [];
+    } else {
+        formatsModalCallback = null;
+        tempActiveFormats = [...activeFormats];
+        tempAcceptAll = acceptAllFormats;
+    }
+
     if (chkAcceptAllFormats) {
         chkAcceptAllFormats.checked = tempAcceptAll;
     }
@@ -2168,6 +2354,7 @@ function openFormatsModal() {
 }
 
 function closeFormatsModal() {
+    formatsModalCallback = null;
     if (formatsModal) formatsModal.style.display = 'none';
 }
 
@@ -2304,14 +2491,25 @@ if (btnResetFormats) {
 
 if (btnSaveFormats) {
     btnSaveFormats.addEventListener('click', () => {
-        acceptAllFormats = chkAcceptAllFormats ? chkAcceptAllFormats.checked : false;
-        activeFormats = [...tempActiveFormats];
+        const acceptAll = chkAcceptAllFormats ? chkAcceptAllFormats.checked : false;
+        const formats = [...tempActiveFormats];
         
-        localStorage.setItem('telegram_accept_all_formats', acceptAllFormats ? 'true' : 'false');
-        localStorage.setItem('telegram_custom_formats', JSON.stringify(activeFormats));
-        
-        closeFormatsModal();
-        applyFormatFilter();
+        if (typeof formatsModalCallback === 'function') {
+            const cb = formatsModalCallback;
+            formatsModalCallback = null;
+            closeFormatsModal();
+            cb({ acceptAll, formats });
+        } else {
+            acceptAllFormats = acceptAll;
+            activeFormats = formats;
+            
+            localStorage.setItem('telegram_accept_all_formats', acceptAllFormats ? 'true' : 'false');
+            localStorage.setItem('telegram_custom_formats', JSON.stringify(activeFormats));
+            
+            closeFormatsModal();
+            updateFormatsSummaryUI();
+            applyFormatFilter();
+        }
     });
 }
 
@@ -2989,6 +3187,8 @@ function connectWebSocket() {
                 updateDownloadRowUI(dbId, 'done');
                 if (data.package_name) updatePackageRowUI(data.package_name);
                 updateDescargasBadges();
+            } else if (data.type === 'history_update' || data.type === 'downloads_update') {
+                loadDownloadsData();
             } else if (data.type === 'finish_all') {
                 const infoDescargasText = document.getElementById('infoDescargasText');
                 if (infoDescargasText) infoDescargasText.textContent = "Todas las descargas han finalizado.";
@@ -2996,6 +3196,8 @@ function connectWebSocket() {
                 if (statusSpeed) statusSpeed.textContent = 'D: 0 MB/s';
                 updateDescargasBadges();
                 loadDownloadsData();
+            } else if (data.type === 'toast') {
+                showToast(data.message, data.toast_type || 'info', data.duration || 9000, data.title || '');
             }
         } catch (err) {
             console.error("Error procesando mensaje WebSocket:", err);
@@ -3015,6 +3217,402 @@ function connectWebSocket() {
 // ═════════════════════════════════════════════════════════════════════════
 
 checkStatus();
-loadDownloadsData();
-loadGrabberData();
+
+// ═════════════════════════════════════════════════════════════════════════
+// 12. SISTEMA DE AUTO-DESCARGAS
+// ═════════════════════════════════════════════════════════════════════════
+
+async function loadAutoChannels() {
+    try {
+        const res = await fetch(`${API_BASE}/autochannels`);
+        const data = await res.json();
+        if (data.status === 'ok') {
+            renderAutoChannels(data.channels || []);
+        }
+    } catch (e) {
+        console.error("Error al cargar autochannels", e);
+    }
+}
+
+// Helper para resumir texto de formatos en tabla de canales
+function getChannelFormatsSummary(fileTypesStr) {
+    if (!fileTypesStr || fileTypesStr === 'all') {
+        return { text: 'Todos los archivos', title: 'Aceptando cualquier tipo de archivo (sin filtro)', isAll: true };
+    }
+    if (fileTypesStr === 'videos') return { text: 'Solo Videos', title: 'Videos (.mp4, .mkv, .avi...)', isAll: false };
+    if (fileTypesStr === 'photos') return { text: 'Solo Fotos', title: 'Fotos e imágenes (.jpg, .png...)', isAll: false };
+    if (fileTypesStr === 'media') return { text: 'Videos y Fotos', title: 'Videos y Fotos', isAll: false };
+    if (fileTypesStr === 'audio') return { text: 'Solo Audio', title: 'Audio y música (.mp3, .flac...)', isAll: false };
+    if (fileTypesStr === 'archives') return { text: 'Comprimidos', title: 'Comprimidos (.zip, .rar, .7z...)', isAll: false };
+    if (fileTypesStr === 'docs') return { text: 'Documentos', title: 'Documentos (.pdf, .epub...)', isAll: false };
+
+    const raw = fileTypesStr.startsWith('custom:') ? fileTypesStr.replace('custom:', '') : fileTypesStr;
+    const parts = raw.split(',').map(p => p.trim()).filter(Boolean);
+    if (parts.length === 0) {
+        return { text: 'Todos los archivos', title: 'Todos los archivos (sin filtro)', isAll: true };
+    }
+    if (parts.length <= 3) {
+        return { text: parts.join(', '), title: parts.join(', '), isAll: false };
+    }
+    return { text: `${parts.slice(0, 3).join(', ')} (+${parts.length - 3})`, title: parts.join(', '), isAll: false };
+}
+
+function getChannelSubfolderSummary(mode) {
+    if (mode === 'channel_only') {
+        return { text: 'Solo Canal', title: 'Descargas en: Carpeta/NombreCanal/archivo.ext', icon: 'fa-folder', color: '#0284c7', bg: '#e0f2fe', border: '#bae6fd' };
+    }
+    if (mode === 'flat') {
+        return { text: 'Plana (Directa)', title: 'Descargas guardadas directamente en la carpeta destino sin subcarpetas', icon: 'fa-file', color: '#475569', bg: '#f1f5f9', border: '#cbd5e1' };
+    }
+    // Default: channel_date
+    return { text: 'Canal / Fecha', title: 'Descargas en: Carpeta/NombreCanal/DD-MM-YYYY/archivo.ext', icon: 'fa-folder-tree', color: '#4338ca', bg: '#eef2ff', border: '#c7d2fe' };
+}
+
+window.changeAutoChannelSubfolderMode = async function(channelId, currentMode) {
+    const nextModes = {
+        'channel_date': 'channel_only',
+        'channel_only': 'flat',
+        'flat': 'channel_date'
+    };
+    const nextMode = nextModes[currentMode] || 'channel_date';
+    try {
+        const res = await fetch(`${API_BASE}/autochannels/update_subfolder_mode`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: channelId, subfolder_mode: nextMode })
+        });
+        const data = await res.json();
+        if (data.status === 'ok') {
+            await loadAutoChannels();
+        }
+    } catch (e) {
+        showToast("Error al actualizar modo de organización: " + e.message, "error");
+    }
+};
+
+function renderAutoChannels(channels) {
+    const tbody = document.getElementById('bodyAutoChannels');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+
+    if (channels.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="7" class="empty-state-cell">
+                    <i class="fa-solid fa-robot empty-icon"></i>
+                    <div>No hay canales monitorizados.</div>
+                    <div class="empty-subtitle">Agrega un canal arriba para descargar automáticamente los nuevos archivos.</div>
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    channels.forEach(ch => {
+        const tr = document.createElement('tr');
+        
+        const stateColor = ch.active ? '#107c10' : '#8e8e8e';
+        const fmtInfo = getChannelFormatsSummary(ch.file_types);
+        const badgeColor = fmtInfo.isAll ? '#0284c7' : '#059669';
+        const badgeBg = fmtInfo.isAll ? '#e0f2fe' : '#ecfdf5';
+        const badgeBorder = fmtInfo.isAll ? '#bae6fd' : '#a7f3d0';
+        const subInfo = getChannelSubfolderSummary(ch.subfolder_mode || 'channel_date');
+
+        tr.innerHTML = `
+            <td style="font-weight: 500;">
+                <i class="fa-solid fa-satellite-dish" style="color: ${stateColor}; margin-right: 6px;"></i> 
+                ${ch.channel_name || ch.channel_url}
+            </td>
+            <td style="color: #666; font-size: 11px;">
+                <span title="${ch.custom_dir || 'Global (carpeta por defecto)'}">
+                    <i class="fa-regular fa-folder" style="color: #eab308;"></i> ${ch.custom_dir || 'Global'}
+                </span>
+                <button type="button" class="action-icon" onclick="changeAutoChannelDir(${ch.id}, '${encodeURIComponent(ch.custom_dir || '')}')" title="Cambiar carpeta de destino" style="margin-left: 6px; font-size: 11px; color: #0284c7;">
+                    <i class="fa-solid fa-pen-to-square"></i>
+                </button>
+            </td>
+            <td style="font-size: 11px;">
+                <span title="${subInfo.title}" style="display: inline-flex; align-items: center; gap: 4px; color: ${subInfo.color}; font-weight: 600; background: ${subInfo.bg}; border: 1px solid ${subInfo.border}; padding: 2px 6px; border-radius: 4px;">
+                    <i class="fa-solid ${subInfo.icon}"></i> ${subInfo.text}
+                </span>
+                <button type="button" class="action-icon" onclick="changeAutoChannelSubfolderMode(${ch.id}, '${ch.subfolder_mode || 'channel_date'}')" title="Cambiar modo de organización (clic para alternar)" style="margin-left: 6px; font-size: 11px; color: #4338ca;">
+                    <i class="fa-solid fa-arrows-rotate"></i>
+                </button>
+            </td>
+            <td style="font-size: 11px;">
+                <span title="${fmtInfo.title}" style="display: inline-block; max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; color: ${badgeColor}; font-weight: 600; background: ${badgeBg}; border: 1px solid ${badgeBorder}; padding: 2px 6px; border-radius: 4px;">
+                    ${fmtInfo.text}
+                </span>
+                <button type="button" class="action-icon" onclick="editAutoChannelFormats(${ch.id}, '${encodeURIComponent(ch.file_types || 'all')}')" title="Editar formatos soportados para este canal" style="margin-left: 6px; font-size: 11px; color: #0284c7;">
+                    <i class="fa-solid fa-pen-to-square"></i>
+                </button>
+            </td>
+            <td style="color: #666; font-size: 11px;">${ch.created_at.substring(0, 10)}</td>
+            <td style="text-align: center;">
+                <label class="switch" style="transform: scale(0.8);">
+                    <input type="checkbox" onchange="toggleAutoChannel(${ch.id}, this.checked)" ${ch.active ? 'checked' : ''}>
+                    <span class="slider round"></span>
+                </label>
+            </td>
+            <td style="text-align: center; white-space: nowrap;">
+                <button class="action-icon" onclick="syncAutoChannel(${ch.id})" title="Sincronizar y buscar nuevos archivos ahora" style="color: #24a1de; margin-right: 4px;">
+                    <i class="fa-solid fa-rotate"></i>
+                </button>
+                <button class="action-icon action-delete" onclick="deleteAutoChannel(${ch.id})" title="Eliminar">
+                    <i class="fa-solid fa-trash-can"></i>
+                </button>
+            </td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
+
+// Estado de formatos para el nuevo canal a añadir
+let newChannelAcceptAllFormats = true;
+let newChannelActiveFormats = [...DEFAULT_ACTIVE_FORMATS];
+
+function updateAutoChannelFormatsSummaryUI() {
+    const summaryEl = document.getElementById('autoChannelFormatsSummary');
+    if (!summaryEl) return;
+    
+    if (newChannelAcceptAllFormats) {
+        summaryEl.textContent = 'Todos los archivos';
+        summaryEl.title = 'Aceptando cualquier tipo de archivo (sin filtro)';
+        summaryEl.style.color = '#0078d4';
+        return;
+    }
+    
+    if (!newChannelActiveFormats || newChannelActiveFormats.length === 0) {
+        summaryEl.textContent = 'Ninguno seleccionado (0)';
+        summaryEl.title = 'Haz clic en Editar para agregar extensiones permitidas';
+        summaryEl.style.color = '#d92d20';
+        return;
+    }
+    
+    summaryEl.style.color = '#059669';
+    const displayList = newChannelActiveFormats.map(ext => ext.toLowerCase());
+    if (displayList.length <= 4) {
+        summaryEl.textContent = displayList.join(', ');
+    } else {
+        const firstFour = displayList.slice(0, 4).join(', ');
+        summaryEl.textContent = `${firstFour} (+${displayList.length - 4} más)`;
+    }
+    summaryEl.title = `Formatos permitidos (${displayList.length}): ${displayList.join(', ')}`;
+}
+
+// Botón editar formatos del nuevo canal (barra superior)
+const btnEditAutoChannelFormats = document.getElementById('btnEditAutoChannelFormats');
+if (btnEditAutoChannelFormats) {
+    btnEditAutoChannelFormats.addEventListener('click', () => {
+        openFormatsModal(
+            newChannelAcceptAllFormats,
+            newChannelActiveFormats,
+            ({ acceptAll, formats }) => {
+                newChannelAcceptAllFormats = acceptAll;
+                newChannelActiveFormats = formats;
+                updateAutoChannelFormatsSummaryUI();
+            }
+        );
+    });
+}
+
+async function addAutoChannel() {
+    const input = document.getElementById('autoChannelLink');
+    const dirInput = document.getElementById('autoChannelDir');
+    const chkExisting = document.getElementById('autoChannelDownloadExisting');
+    const url = input.value.trim();
+    if (!url) {
+        showToast("Debes ingresar un enlace válido.", "error");
+        return;
+    }
+    
+    let fileTypesStr = "all";
+    if (!newChannelAcceptAllFormats) {
+        fileTypesStr = (newChannelActiveFormats && newChannelActiveFormats.length > 0)
+            ? newChannelActiveFormats.join(', ')
+            : "all";
+    }
+
+    const btn = document.getElementById('btnAddAutoChannel');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Verificando...';
+    }
+    
+    try {
+        const downloadExisting = chkExisting ? chkExisting.checked : true;
+        const subfolderSelect = document.getElementById('autoChannelSubfolderMode');
+        const subfolderMode = subfolderSelect ? subfolderSelect.value : 'channel_date';
+
+        const res = await fetch(`${API_BASE}/autochannels/add`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                url: url,
+                custom_dir: dirInput.value.trim(),
+                download_existing: downloadExisting,
+                file_types: fileTypesStr,
+                subfolder_mode: subfolderMode
+            })
+        });
+        const data = await res.json();
+        
+        if (data.status === 'ok') {
+            input.value = '';
+            dirInput.value = '';
+            if (subfolderSelect) subfolderSelect.value = 'channel_date';
+            newChannelAcceptAllFormats = true;
+            newChannelActiveFormats = [...DEFAULT_ACTIVE_FORMATS];
+            updateAutoChannelFormatsSummaryUI();
+
+            const msg = (data.enqueued && data.enqueued > 0)
+                ? `Canal añadido correctamente. Se encolaron ${data.enqueued} archivo(s) existentes.`
+                : "Canal añadido correctamente a la lista de monitoreo.";
+            showToast(msg, "success");
+            loadAutoChannels();
+            loadDownloadsData();
+        } else {
+            showToast(`Error: ${data.message}`, "error");
+        }
+    } catch (e) {
+        showToast("Error de red al añadir canal.", "error");
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fa-solid fa-plus"></i> Añadir Canal';
+        }
+    }
+}
+
+async function syncAutoChannel(id) {
+    showToast("Sincronizando canal...", "info");
+    try {
+        const res = await fetch(`${API_BASE}/autochannels/sync`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ id })
+        });
+        const data = await res.json();
+        if (data.status === 'ok') {
+            if (data.enqueued && data.enqueued > 0) {
+                showToast(`Sincronización completa: ${data.enqueued} archivo(s) nuevo(s) encolados.`, "success");
+            } else {
+                showToast("El canal ya está al día. No hay archivos nuevos pendientes con el filtro actual.", "info");
+            }
+            loadDownloadsData();
+        } else {
+            showToast(`Error al sincronizar: ${data.message}`, "error");
+        }
+    } catch (e) {
+        showToast("Error de red al sincronizar canal.", "error");
+    }
+}
+
+async function toggleAutoChannel(id, active) {
+    await fetch(`${API_BASE}/autochannels/toggle`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ id, active: active ? 1 : 0 })
+    });
+    loadAutoChannels();
+}
+
+async function deleteAutoChannel(id) {
+    if (!confirm("¿Seguro que quieres eliminar este canal de la lista de monitorización?")) return;
+    await fetch(`${API_BASE}/autochannels/delete`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ id })
+    });
+    loadAutoChannels();
+}
+
+// Cambiar carpeta de destino de un canal existente
+function changeAutoChannelDir(id, currentDirEncoded) {
+    const currentDir = decodeURIComponent(currentDirEncoded || '');
+    const startPath = currentDir || (customDirInput ? customDirInput.value.trim() : '');
+    openFolderPicker(startPath, async (selectedPath) => {
+        try {
+            const res = await fetch(`${API_BASE}/autochannels/update_dir`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ id, custom_dir: selectedPath })
+            });
+            const data = await res.json();
+            if (data.status === 'ok') {
+                showToast("Carpeta de destino actualizada correctamente.", "success");
+                loadAutoChannels();
+            } else {
+                showToast(`Error al actualizar carpeta: ${data.message}`, "error");
+            }
+        } catch (e) {
+            showToast("Error de red al actualizar carpeta.", "error");
+        }
+    });
+}
+
+// Editar formatos soportados de un canal existente usando el modal de formatos
+function editAutoChannelFormats(id, currentTypesEncoded) {
+    const raw = decodeURIComponent(currentTypesEncoded || 'all');
+    let initAcceptAll = false;
+    let initFormats = [];
+
+    if (!raw || raw === 'all') {
+        initAcceptAll = true;
+        initFormats = [...DEFAULT_ACTIVE_FORMATS];
+    } else {
+        const clean = raw.startsWith('custom:') ? raw.replace('custom:', '') : raw;
+        initFormats = clean.split(',').map(p => p.trim()).filter(Boolean);
+        initAcceptAll = false;
+    }
+
+    openFormatsModal(
+        initAcceptAll,
+        initFormats,
+        async ({ acceptAll, formats }) => {
+            const finalStr = acceptAll ? 'all' : (formats.length > 0 ? formats.join(', ') : 'all');
+            try {
+                const res = await fetch(`${API_BASE}/autochannels/update_types`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ id, file_types: finalStr })
+                });
+                const data = await res.json();
+                if (data.status === 'ok') {
+                    showToast("Formatos actualizados correctamente para el canal.", "success");
+                    loadAutoChannels();
+                } else {
+                    showToast(`Error: ${data.message || 'No se pudo actualizar'}`, "error");
+                }
+            } catch (e) {
+                showToast("Error de red al actualizar formatos.", "error");
+            }
+        }
+    );
+}
+
+// Botón añadir canal
+const btnAddAutoChannel = document.getElementById('btnAddAutoChannel');
+if (btnAddAutoChannel) {
+    btnAddAutoChannel.addEventListener('click', addAutoChannel);
+}
+
+// Selector de carpeta para el input de añadir AutoChannel
+const btnSelectAutoDir = document.getElementById('btnSelectAutoDir');
+if (btnSelectAutoDir) {
+    btnSelectAutoDir.addEventListener('click', () => {
+        const autoInput = document.getElementById('autoChannelDir');
+        const startPath = (autoInput && autoInput.value.trim()) || (customDirInput ? customDirInput.value.trim() : '');
+        openFolderPicker(startPath, (selectedPath) => {
+            if (autoInput) {
+                autoInput.value = selectedPath;
+            }
+        });
+    });
+}
+
+// Inicializar texto de formatos para auto-canal
+updateAutoChannelFormatsSummaryUI();
+
+
 

@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  telegram-downloader:
+    build: .
+    container_name: telegram-downloader
+    restart: unless-stopped
+    expose:
+      - "8000"
+    volumes:
+      # Mapeo de todo el volumen 1 para poder explorarlo desde la app
+      - /volume1:/volume1
+      
+      # Carpeta por defecto donde se guardarán las descargas si no eliges otra
+      - "/volume1/Descargas Telegram:/app/descargas"
+      
+      # Persistencia de la base de datos de descargas
+      - ./downloads.db:/app/downloads.db
+      
+      # Persistencia de la sesión de Telegram
+      - ./mi_sesion.session:/app/mi_sesion.session
+      
+    environment:
+      - TZ=America/Argentina/Buenos_Aires
+
+  caddy:
+    image: caddy:alpine
+    container_name: telegram-proxy
+    restart: unless-stopped
+    ports:
+      - "8000:80"
+    depends_on:
+      - telegram-downloader
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile

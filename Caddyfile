@@ -1,0 +1,16 @@
+http://:80 {
+    # Definir regla para aplicar contraseña a todo EXCEPTO al websocket (/ws)
+    @notws {
+        not path /ws
+    }
+
+    # Habilitar autenticación básica para la regla anterior
+    basicauth @notws {
+        # Usuario: admin
+        # Contraseña por defecto: admin (¡Cámbiala más tarde si quieres!)
+        admin JDJiJDEyJG1xa3pBR0hBS003UW8wbktHNTN6ei5JWGZTSVZvTktUSzRGSVhGa3U2NzgwOHZuZlZ6V1dh
+    }
+
+    # Redirigir el tráfico interno al contenedor de python en el puerto 8000
+    reverse_proxy telegram-downloader:8000
+}

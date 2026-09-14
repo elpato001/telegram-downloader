@@ -30,6 +30,10 @@
                     <span>Capturador de Enlaces</span>
                     <span class="jd-tab-badge" id="badgeGrabberCount" style="display: none;">0</span>
                 </button>
+                <button type="button" class="jd-tab" id="tabAuto">
+                    <i class="fa-solid fa-robot" style="color: #60a5fa;"></i>
+                    <span>Automatizaciones</span>
+                </button>
             </div>
 
             <div class="header-right-tools">
@@ -188,9 +192,90 @@
         </div>
 
         <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- VISTA 3: PESTAÑA AUTO-DESCARGAS (Automatizaciones)              -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <div id="viewAuto" class="tab-view" style="display: none;">
+            <div class="toolbar link-input-toolbar">
+                <div class="toolbar-group input-group-link">
+                    <label for="autoChannelLink" style="white-space: nowrap; font-weight: 600; color: #333;">
+                        <i class="fa-solid fa-link" style="color: #24a1de; margin-right: 4px;"></i> Enlace del Canal/Grupo:
+                    </label>
+                    <input type="text" id="autoChannelLink" placeholder="Ej: https://t.me/mi_canal_favorito" class="main-input">
+                    
+                    <label style="white-space: nowrap; font-weight: 600; color: #333; margin-left: 10px;">
+                        <i class="fa-solid fa-filter" style="color: #0284c7; margin-right: 4px;"></i> Formatos:
+                    </label>
+                    <div style="display: flex; align-items: center; gap: 6px; font-size: 11px;">
+                        <span id="autoChannelFormatsSummary" style="font-weight: 600; max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #0078d7; background: #e0f2fe; padding: 4px 8px; border-radius: 4px; border: 1px solid #bae6fd;" title="Formatos permitidos para este canal">Todos los archivos</span>
+                        <button type="button" id="btnEditAutoChannelFormats" class="btn" style="padding: 3px 8px; font-size: 11px; font-weight: 600; color: #374151;" title="Configurar formatos de archivo soportados para este canal">
+                            <i class="fa-solid fa-pen-to-square"></i> Editar
+                        </button>
+                    </div>
+
+                    <label style="white-space: nowrap; font-weight: 600; color: #333; margin-left: 10px;">
+                        <i class="fa-solid fa-folder" style="color: #eab308; margin-right: 4px;"></i> Carpeta destino:
+                    </label>
+                    <div class="input-with-button">
+                        <input type="text" id="autoChannelDir" class="main-input" placeholder="Carpeta de destino global (por defecto)" style="width: 200px;">
+                        <button type="button" class="folder-btn" id="btnSelectAutoDir" title="Seleccionar Carpeta">
+                            <i class="fa-regular fa-folder-open"></i>
+                        </button>
+                    </div>
+
+                    <label style="white-space: nowrap; font-weight: 600; color: #333; margin-left: 10px;">
+                        <i class="fa-solid fa-folder-tree" style="color: #6366f1; margin-right: 4px;"></i> Organización:
+                    </label>
+                    <select id="autoChannelSubfolderMode" class="main-input" style="width: 180px; height: 28px; font-size: 11px; padding: 2px 6px; cursor: pointer;" title="Estructura de subcarpetas para guardar los archivos descargados">
+                        <option value="channel_date" selected>📁 Canal / Fecha (DD-MM-YYYY)</option>
+                        <option value="channel_only">📁 Solo Canal</option>
+                        <option value="flat">📄 Carpeta directa (plana)</option>
+                    </select>
+
+                    <label style="display: flex; align-items: center; gap: 6px; margin-left: 10px; font-size: 12px; color: #333; cursor: pointer; user-select: none;" title="Si está marcado, escanea y descarga los archivos multimedia que ya se encuentren en el canal">
+                        <input type="checkbox" id="autoChannelDownloadExisting" checked style="cursor: pointer;">
+                        <span>Descargar archivos existentes</span>
+                    </label>
+
+                    <button class="toolbar-btn primary-btn" id="btnAddAutoChannel" title="Añadir a la lista de monitoreo">
+                        <i class="fa-solid fa-plus"></i> Añadir Canal
+                    </button>
+                </div>
+            </div>
+
+            <div class="workspace">
+                <div class="main-content">
+                    <div class="table-container">
+                        <table id="tableAutoChannels">
+                            <thead>
+                                <tr>
+                                    <th style="width: 22%;">Canal / Grupo</th>
+                                    <th style="width: 22%;">Ruta de Destino</th>
+                                    <th style="width: 18%;">Organización</th>
+                                    <th style="width: 16%;">Formatos</th>
+                                    <th style="width: 10%;">Fecha Agregado</th>
+                                    <th style="width: 6%; text-align: center;">Estado</th>
+                                    <th style="width: 6%; text-align: center;">Acción</th>
+                                </tr>
+                            </thead>
+                            <tbody id="bodyAutoChannels">
+                                <tr>
+                                    <td colspan="7" class="empty-state-cell">
+                                        <i class="fa-solid fa-robot empty-icon"></i>
+                                        <div>No hay canales monitorizados.</div>
+                                        <div class="empty-subtitle">Agrega un canal arriba para descargar automáticamente los nuevos archivos que se publiquen.</div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
         <!-- PANEL INFERIOR Y BARRA DE ESTADO (Común a ambas pestañas)       -->
         <!-- ═══════════════════════════════════════════════════════════════ -->
-        <div class="info-panel">
+        <div class="info-panel" id="bottomInfoPanel">
             <div class="info-row" style="display: flex; justify-content: space-between; align-items: center; width: 100%; gap: 15px; flex-wrap: nowrap;">
                 <!-- Grupo Info Descargas -->
                 <div id="infoDescargasGroup" style="display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0;">
@@ -209,8 +294,8 @@
                     <span id="infoGrabberText" style="font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">0 paquetes en el capturador</span>
                 </div>
 
-                <!-- Barra de Configuración: Formatos, Fecha y Destino (Visible en ambas pestañas) -->
-                <div style="display: flex; align-items: center; gap: 14px; flex-shrink: 0;">
+                <!-- Barra de Configuración: Formatos, Fecha y Destino (Visible en descargas y capturador) -->
+                <div id="bottomBarConfig" style="display: flex; align-items: center; gap: 14px; flex-shrink: 0;">
                     <!-- Formatos soportados -->
                     <div style="display: flex; align-items: center; gap: 6px; font-size: 11px;">
                         <i class="fa-solid fa-filter" style="color: var(--text-muted);"></i>
@@ -498,6 +583,21 @@
                         <button type="button" id="btnGoToPath" class="btn" title="Ir a la ruta ingresada" style="padding: 3px 8px; font-size: 11px; background: #e5f1fb; border-color: #24a1de; color: #24a1de; font-weight: 600;">
                             Ir
                         </button>
+                        <button type="button" id="btnNewFolderModal" class="btn" title="Crear nueva carpeta en la ubicación actual" style="padding: 3px 8px; font-size: 11px; background: #ecfdf5; border-color: #10b981; color: #059669; font-weight: 600; display: inline-flex; align-items: center; gap: 4px; white-space: nowrap;">
+                            <i class="fa-solid fa-folder-plus"></i> Nueva carpeta
+                        </button>
+                    </div>
+
+                    <!-- Fila interactiva para crear nueva carpeta -->
+                    <div id="newFolderRow" style="display: none; padding: 6px 10px; background: #f0fdf4; border-bottom: 1px solid #bbf7d0; align-items: center; gap: 6px;">
+                        <i class="fa-solid fa-folder-plus" style="color: #16a34a; font-size: 13px;"></i>
+                        <input type="text" id="newFolderNameInput" placeholder="Nombre de la nueva carpeta..." style="flex: 1; font-size: 11px; padding: 4px 8px; border: 1px solid #86efac; border-radius: 4px; outline: none; background: #fff;">
+                        <button type="button" id="btnConfirmNewFolder" class="btn" style="padding: 3px 10px; font-size: 11px; background: #16a34a; color: white; border: none; font-weight: 600; border-radius: 4px; cursor: pointer; display: inline-flex; align-items: center; gap: 4px;">
+                            <i class="fa-solid fa-check"></i> Crear
+                        </button>
+                        <button type="button" id="btnCancelNewFolder" class="btn" style="padding: 3px 8px; font-size: 11px; background: #e5e7eb; color: #374151; border: none; border-radius: 4px; cursor: pointer;">
+                            Cancelar
+                        </button>
                     </div>
 
                     <div id="folderList" style="flex: 1; min-height: 180px; max-height: 240px; overflow-y: auto; padding: 4px 0;">
@@ -505,11 +605,16 @@
                     </div>
                 </div>
 
-                <div style="font-size: 11px; color: var(--text-muted); display: flex; justify-content: space-between; align-items: center;">
+                <div style="font-size: 11px; color: var(--text-muted); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px;">
                     <span>Carpeta actual: <strong id="folderSelectedDisplay" style="color: var(--text-main); font-family: monospace;">-</strong></span>
-                    <button type="button" id="btnClassicWinDialog" class="btn" style="font-size: 11px; padding: 3px 8px; color: #4b5563;" title="Abrir cuadro de diálogo nativo de Windows">
-                        <i class="fa-brands fa-windows"></i> Diálogo de Windows
-                    </button>
+                    <div style="display: flex; gap: 6px; align-items: center;">
+                        <button type="button" id="btnNewFolderModalBottom" class="btn" style="font-size: 11px; padding: 3px 8px; color: #059669; border-color: #10b981; background: #ecfdf5; font-weight: 600; display: inline-flex; align-items: center; gap: 4px;" title="Crear nueva carpeta en la ubicación actual">
+                            <i class="fa-solid fa-folder-plus"></i> Crear carpeta
+                        </button>
+                        <button type="button" id="btnClassicWinDialog" class="btn" style="font-size: 11px; padding: 3px 8px; color: #4b5563;" title="Abrir cuadro de diálogo nativo de Windows">
+                            <i class="fa-brands fa-windows"></i> Diálogo de Windows
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -544,6 +649,6 @@
     <div id="toastContainer" class="toast-container"></div>
 
     <script src="qrcode.min.js"></script>
-    <script src="script.js?v=1.3"></script>
+    <script src="script.js?v=2.0"></script>
 </body>
 </html>

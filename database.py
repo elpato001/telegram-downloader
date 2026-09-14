@@ -123,6 +123,73 @@ def init_db():
     except Exception as mig_err:
         pass
 
+    # 3. Tabla para Auto-Descargas (canales automatizados)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS auto_channels (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel_url TEXT NOT NULL,
+            entity_id TEXT NOT NULL DEFAULT '',
+            channel_name TEXT NOT NULL DEFAULT '',
+            custom_dir TEXT NOT NULL DEFAULT '',
+            file_types TEXT NOT NULL DEFAULT 'all',
+            subfolder_mode TEXT NOT NULL DEFAULT 'channel_date',
+            last_message_id INTEGER NOT NULL DEFAULT 0,
+            last_checked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # Migración: Agregar columna file_types a auto_channels si no existe
+    try:
+        conn.execute("ALTER TABLE auto_channels ADD COLUMN file_types TEXT NOT NULL DEFAULT 'all'")
+    except Exception:
+        pass
+
+    # Migración: Agregar columna subfolder_mode a auto_channels si no existe
+    try:
+        conn.execute("ALTER TABLE auto_channels ADD COLUMN subfolder_mode TEXT NOT NULL DEFAULT 'channel_date'")
+    except Exception:
+        pass
+
+    # Migración: Agregar columna last_message_id a auto_channels si no existe
+    try:
+        conn.execute("ALTER TABLE auto_channels ADD COLUMN last_message_id INTEGER NOT NULL DEFAULT 0")
+    except Exception:
+        pass
+
+    # Migración: Agregar columna last_checked_at a auto_channels si no existe
+    try:
+        conn.execute("ALTER TABLE auto_channels ADD COLUMN last_checked_at TIMESTAMP")
+    except Exception:
+        pass
+
+    # Inicializar last_message_id para canales existentes si ya tienen descargas previas
+    try:
+        rows = conn.execute("SELECT id, entity_id FROM auto_channels WHERE last_message_id = 0").fetchall()
+        for r in rows:
+            cid = r["id"]
+            ent = str(r["entity_id"] or "")
+            clean_ent = ent.replace("-100", "").replace("-", "")
+            if clean_ent:
+                max_row = conn.execute(
+                    "SELECT MAX(message_id) as max_id FROM downloads WHERE replace(replace(entity_id, '-100', ''), '-', '') = ?",
+                    (clean_ent,)
+                ).fetchone()
+                if max_row and max_row["max_id"]:
+                    conn.execute("UPDATE auto_channels SET last_message_id = ?, last_checked_at = CURRENT_TIMESTAMP WHERE id = ?", (max_row["max_id"], cid))
+    except Exception:
+        pass
+
+    # 4. Tabla para configuraciones del sistema (última sesión activa, etc.)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS app_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     # Resetear cualquier descarga que haya quedado en 'downloading' tras cerrar la app a 'paused'
     try:
         conn.execute("UPDATE downloads SET state = 'paused' WHERE state = 'downloading'")
@@ -190,6 +257,20 @@ def get_download(download_id):
     """Retorna una descarga por su ID."""
     conn = _get_conn()
     row = conn.execute("SELECT * FROM downloads WHERE id = ?", (download_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def get_download_by_message(message_id, entity_id=""):
+    """Busca una descarga por el ID de mensaje y opcionalmente entidad de Telegram."""
+    conn = _get_conn()
+    clean_id = str(entity_id).replace("-100", "").replace("-", "")
+    if clean_id:
+        row = conn.execute(
+            "SELECT * FROM downloads WHERE message_id = ? AND replace(replace(entity_id, '-100', ''), '-', '') = ?",
+            (message_id, clean_id)
+        ).fetchone()
+    else:
+        row = conn.execute("SELECT * FROM downloads WHERE message_id = ?", (message_id,)).fetchone()
     return dict(row) if row else None
 
 
@@ -322,3 +403,121 @@ def clear_grabber():
     conn.execute("DELETE FROM grabber_items")
     conn.execute("DELETE FROM grabber_packages")
     conn.commit()
+
+
+# ─── Métodos para Auto-Descargas (Pestaña "Automatizaciones") ──────────────
+
+def get_auto_channels():
+    """Retorna todos los canales automatizados."""
+    conn = _get_conn()
+    rows = conn.execute("SELECT * FROM auto_channels ORDER BY created_at DESC").fetchall()
+    return [dict(row) for row in rows]
+
+def get_auto_channel(channel_id):
+    """Retorna un canal automatizado por su ID."""
+    conn = _get_conn()
+    row = conn.execute("SELECT * FROM auto_channels WHERE id = ?", (channel_id,)).fetchone()
+    return dict(row) if row else None
+
+def add_auto_channel(channel_url, entity_id, channel_name, custom_dir, file_types="all", subfolder_mode="channel_date", last_message_id=0):
+    """Agrega un nuevo canal a la lista de auto-descargas."""
+    conn = _get_conn()
+    cursor = conn.execute(
+        "INSERT INTO auto_channels (channel_url, entity_id, channel_name, custom_dir, file_types, subfolder_mode, last_message_id, last_checked_at, active) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 1)",
+        (channel_url.strip(), str(entity_id), channel_name.strip(), custom_dir.strip(), (file_types or "all").strip(), (subfolder_mode or "channel_date").strip(), int(last_message_id or 0))
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+def toggle_auto_channel(channel_id, active):
+    """Activa o desactiva la automatización para un canal."""
+    conn = _get_conn()
+    conn.execute("UPDATE auto_channels SET active = ? WHERE id = ?", (int(active), channel_id))
+    conn.commit()
+
+def delete_auto_channel(channel_id):
+    """Elimina un canal de la lista de auto-descargas."""
+    conn = _get_conn()
+    conn.execute("DELETE FROM auto_channels WHERE id = ?", (channel_id,))
+    conn.commit()
+
+def update_auto_channel_dir(channel_id, custom_dir):
+    """Actualiza la carpeta de destino de un canal automatizado."""
+    conn = _get_conn()
+    conn.execute("UPDATE auto_channels SET custom_dir = ? WHERE id = ?", (custom_dir.strip(), channel_id))
+    conn.commit()
+
+def update_auto_channel_types(channel_id, file_types):
+    """Actualiza el tipo de archivos permitidos para un canal automatizado."""
+    conn = _get_conn()
+    conn.execute("UPDATE auto_channels SET file_types = ? WHERE id = ?", ((file_types or "all").strip(), channel_id))
+    conn.commit()
+
+def update_auto_channel_subfolder_mode(channel_id, subfolder_mode):
+    """Actualiza el modo de organización de subcarpetas de un canal automatizado."""
+    conn = _get_conn()
+    conn.execute("UPDATE auto_channels SET subfolder_mode = ? WHERE id = ?", ((subfolder_mode or "channel_date").strip(), channel_id))
+    conn.commit()
+
+def update_auto_channel_last_message(channel_id, last_message_id):
+    """Actualiza el último ID de mensaje procesado y la fecha de verificación del canal."""
+    if not channel_id or not last_message_id:
+        return
+    conn = _get_conn()
+    conn.execute(
+        "UPDATE auto_channels SET last_message_id = MAX(last_message_id, ?), last_checked_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (int(last_message_id), channel_id)
+    )
+    conn.commit()
+
+def update_auto_channel_last_message_by_entity(entity_id, last_message_id):
+    """Actualiza el último ID de mensaje procesado buscando por entity_id."""
+    clean_ent = str(entity_id or '').replace("-100", "").replace("-", "")
+    if not clean_ent or not last_message_id:
+        return
+    conn = _get_conn()
+    conn.execute(
+        "UPDATE auto_channels SET last_message_id = MAX(last_message_id, ?), last_checked_at = CURRENT_TIMESTAMP "
+        "WHERE replace(replace(entity_id, '-100', ''), '-', '') = ?",
+        (int(last_message_id), clean_ent)
+    )
+    conn.commit()
+
+
+# ─── Métodos para Configuración Global y Estado de Sesión ─────────────────
+
+def get_setting(key, default=None):
+    """Obtiene el valor de una configuración global."""
+    conn = _get_conn()
+    row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else default
+
+def set_setting(key, value):
+    """Guarda o actualiza una configuración global."""
+    conn = _get_conn()
+    conn.execute(
+        "INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP",
+        (str(key), str(value))
+    )
+    conn.commit()
+
+def touch_app_active_time():
+    """Actualiza la marca de tiempo de actividad de la aplicación (UTC ISO)."""
+    from datetime import datetime, timezone
+    now_iso = datetime.now(timezone.utc).isoformat()
+    set_setting("last_app_active_at", now_iso)
+
+def get_last_app_active_time():
+    """Retorna la fecha/hora UTC (datetime) de la última actividad de la aplicación registrada."""
+    from datetime import datetime
+    val = get_setting("last_app_active_at")
+    if not val:
+        return None
+    try:
+        return datetime.fromisoformat(val)
+    except Exception:
+        return None
+
+
+
