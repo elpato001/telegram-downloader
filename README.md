@@ -24,7 +24,15 @@ Visualiza el progreso de todas tus descargas activas, pausadas o finalizadas, or
   <p><em>Gestor de Descargas: barras de progreso individuales y globales por paquete, velocidad en MB/s en tiempo real y controles de pausa/reanudación.</em></p>
 </div>
 
-### 3. Métodos de Inicio de Sesión
+### 3. Automatizaciones (Monitoreo y Auto-Descargas)
+Monitorea canales y grupos en segundo plano para descargar automáticamente nuevos contenidos con filtros personalizados y organización de carpetas.
+
+<div align="center">
+  <img src="https://raw.githubusercontent.com/elpato001/telegram-downloader/main/assets/screenshot_automatizaciones.png" alt="Pestaña de Automatizaciones" width="900" />
+  <p><em>Automatizaciones: tabla de canales monitorizados con filtros de formato, modos de subcarpetas, sincronización offline y conmutador de estado activo/pausa.</em></p>
+</div>
+
+### 4. Métodos de Inicio de Sesión
 Conéctate de forma segura y sin necesidad de crear aplicaciones o tokens de Telegram:
 
 <div align="center">
