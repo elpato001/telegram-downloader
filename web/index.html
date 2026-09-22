@@ -125,11 +125,32 @@
         <div id="viewGrabber" class="tab-view" style="display: none;">
             <!-- Barra superior para Añadir / Escanear Enlaces -->
             <div class="toolbar link-input-toolbar">
-                <div class="toolbar-group input-group-link">
+                <div class="toolbar-group input-group-link" style="flex-wrap: wrap; gap: 8px;">
                     <label for="channelLink" style="white-space: nowrap; font-weight: 600; color: #333;">
                         <i class="fa-solid fa-link" style="color: #24a1de; margin-right: 4px;"></i> Enlace de Telegram:
                     </label>
-                    <input type="text" id="channelLink" placeholder="Ej: https://t.me/nombre_canal o t.me/c/12345/678" class="main-input">
+                    <input type="text" id="channelLink" placeholder="Ej: https://t.me/nombre_canal o t.me/c/12345/678" class="main-input" style="min-width: 250px;">
+                    
+                    <!-- Filtro por Rango de Fecha -->
+                    <div class="date-filter-container" style="display: inline-flex; align-items: center; gap: 6px; background: #ffffff; padding: 2px 8px; border-radius: 4px; border: 1px solid #cbd5e1;">
+                        <label for="scanDatePreset" style="font-size: 11px; font-weight: 600; color: #475569; display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; margin: 0; cursor: pointer;">
+                            <i class="fa-regular fa-calendar-days" style="color: #6366f1;"></i> Fecha:
+                        </label>
+                        <select id="scanDatePreset" class="main-input" style="width: auto; padding: 2px 6px; font-size: 11px; height: 26px; border: 1px solid #cbd5e1; border-radius: 3px; cursor: pointer; background: #f8fafc; font-weight: 500;">
+                            <option value="all">Todo el historial</option>
+                            <option value="today">Hoy</option>
+                            <option value="7days">Últimos 7 días</option>
+                            <option value="30days">Últimos 30 días</option>
+                            <option value="custom">Personalizado...</option>
+                        </select>
+                        <div id="scanCustomDateRange" style="display: none; align-items: center; gap: 4px;">
+                            <span style="font-size: 11px; color: #64748b; font-weight: 500;">Desde:</span>
+                            <input type="date" id="scanDateFrom" class="main-input" style="width: 125px; padding: 2px 4px; font-size: 11px; height: 26px; border: 1px solid #cbd5e1; border-radius: 3px;" title="Fecha de inicio (inclusive)">
+                            <span style="font-size: 11px; color: #64748b; font-weight: 500;">Hasta:</span>
+                            <input type="date" id="scanDateTo" class="main-input" style="width: 125px; padding: 2px 4px; font-size: 11px; height: 26px; border: 1px solid #cbd5e1; border-radius: 3px;" title="Fecha de fin (inclusive)">
+                        </div>
+                    </div>
+
                     <button class="toolbar-btn primary-btn" id="btnScanSubmit" title="Escanear y añadir paquete al capturador">
                         <i class="fa-solid fa-magnifying-glass"></i> Escanear Enlace
                     </button>
@@ -141,6 +162,9 @@
                 <div class="toolbar-group">
                     <button class="toolbar-btn primary-btn start-download-btn" id="btnStartGrabberDownloads" title="Iniciar la descarga de los elementos o paquetes seleccionados">
                         <i class="fa-solid fa-circle-arrow-down"></i> Iniciar Descargas
+                    </button>
+                    <button class="toolbar-btn" id="btnReorganizeGrabber" title="Dividir y agrupar automáticamente los archivos en paquetes por modelo/esquemático">
+                        <i class="fa-solid fa-folder-tree" style="color: #6366f1;"></i> Organizar por Modelo
                     </button>
                     <button class="toolbar-btn" id="btnDeleteSelectedGrabber" title="Eliminar los elementos seleccionados del capturador">
                         <i class="fa-solid fa-trash-can" style="color: #d92d20;"></i> Borrar Selección
@@ -225,8 +249,9 @@
                     <label style="white-space: nowrap; font-weight: 600; color: #333; margin-left: 10px;">
                         <i class="fa-solid fa-folder-tree" style="color: #6366f1; margin-right: 4px;"></i> Organización:
                     </label>
-                    <select id="autoChannelSubfolderMode" class="main-input" style="width: 180px; height: 28px; font-size: 11px; padding: 2px 6px; cursor: pointer;" title="Estructura de subcarpetas para guardar los archivos descargados">
-                        <option value="channel_date" selected>📁 Canal / Fecha (DD-MM-YYYY)</option>
+                    <select id="autoChannelSubfolderMode" class="main-input" style="width: 190px; height: 28px; font-size: 11px; padding: 2px 6px; cursor: pointer;" title="Estructura de subcarpetas para guardar los archivos descargados">
+                        <option value="channel_model" selected>📁 Canal / Por Modelo o Archivo</option>
+                        <option value="channel_date">📁 Canal / Fecha (DD-MM-YYYY)</option>
                         <option value="channel_only">📁 Solo Canal</option>
                         <option value="flat">📄 Carpeta directa (plana)</option>
                     </select>

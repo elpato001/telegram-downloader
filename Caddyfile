@@ -6,8 +6,17 @@ http://:80 {
 
     # Habilitar autenticación básica para la regla anterior
     basicauth @notws {
+        # --- CÓMO CAMBIAR LA CONTRASEÑA ---
+        # 1. Abre una nueva consola en esta carpeta
+        # 2. Genera una nueva contraseña cifrada ejecutando este comando:
+        #    docker compose exec caddy caddy hash-password --plaintext "NUEVA_CLAVE"
+        # 3. Reemplaza la cadena larga de abajo por la que te devuelve el comando
+        # 4. Aplica los cambios sin apagar la aplicación ejecutando:
+        #    docker compose exec caddy caddy reload --config /etc/caddy/Caddyfile
+        # ----------------------------------
+        #
         # Usuario: admin
-        # Contraseña por defecto: admin (¡Cámbiala más tarde si quieres!)
+        # Contraseña por defecto: admin
         admin JDJiJDEyJG1xa3pBR0hBS003UW8wbktHNTN6ei5JWGZTSVZvTktUSzRGSVhGa3U2NzgwOHZuZlZ6V1dh
     }
 

@@ -14,7 +14,7 @@ pip install -r requirements.txt --quiet
 :: Iniciar servidor y abrir navegador
 echo Abriendo aplicacion en el navegador...
 start http://localhost:8000
-python -m uvicorn app:app --host 127.0.0.1 --port 8000
+python -m uvicorn app:app --host 127.0.0.1 --port 8000 --reload
 
 echo.
 echo =================================================

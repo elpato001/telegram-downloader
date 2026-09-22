@@ -12,6 +12,7 @@ import sys
 import logging
 import asyncio
 import time
+import re
 from pathlib import Path
 
 # Configurar la consola de Windows para soportar emojis y caracteres especiales
@@ -162,10 +163,87 @@ def obtener_nombre_archivo(message) -> str | None:
     return None
 
 
-def extraer_info_archivo(message) -> tuple[str | None, int, any]:
+def clean_filename_for_pack(fname: str) -> str:
+    """Limpia el nombre de un archivo para obtener el identificador base de modelo o paquete."""
+    import re
+    if not fname:
+        return ""
+    s = re.sub(r'(?i)\.(part\d+|z\d+|7z\.\d+|\d{3})\.(rar|zip|7z|tar|gz)$', '', fname)
+    s = re.sub(r'(?i)\.part\d+\.rar$', '', s)
+    s = re.sub(r'(?i)\.(rar|zip|7z|tar|gz|mp4|mkv|avi|mov|iso|bin|rom|hex|cue|chd|cso|exe|pdf|jpg|jpeg|png|webp|cad|bdv|brd|tvw|fz)$', '', s)
+    s = re.sub(r'(?i)[._ -]part\d+$', '', s)
+    s = re.sub(r'(?i)\.z\d+$', '', s)
+    s = re.sub(r'(?i)[._ -](preview|boardview|schematic|foto)$', '', s)
+    s = re.sub(r'\s*\(\d+\)$', '', s)
+    s = re.sub(r'[<>:"/\\|?*]', '', s).strip()
+    return s
+
+
+AD_KEYWORDS = [
+    'vip', 'not_free', 'purchase', 'contact admin', 'admin',
+    'tested ok', 'tested 100%', 'working 100%', 'tested working',
+    'worldwide access', 'instant delivery', 'join', 'stars as a gift',
+    'laptop_repair', 'biosarchive', 'schematicslaptop', 'canal', 'channel', 'suscribete',
+    'subscribe', 'whatsapp', 'telegram', 'password:', 'free for vip',
+    'gift', 'donate', 'paypal', 'binance', 'usdt'
+]
+
+
+def extraer_nombre_de_texto(text: str) -> str | None:
+    """
+    Extrae inteligentemente el nombre del equipo, placa madre, BIOS o modelo desde el texto/caption de un post.
+    Filtra emojis decorativos, números de post (#666), enlaces, menciones de usuarios y avisos publicitarios.
+    """
+    import re
+    if not text:
+        return None
+    lines = [l.strip() for l in text.split('\n') if l.strip()]
+    candidates = []
+    for line in lines:
+        clean = re.sub(r'^[^\w\d#]+', '', line).strip()
+        clean = re.sub(r'[^\w\d\s\-_().\[\]]+$', '', clean).strip()
+        if not clean:
+            continue
+        
+        # Ignorar si es solo número de post o contador (ej: #666, 666, #post123, No. 666)
+        if re.match(r'^(#|no\.?|num\.?|№)?\s*\d+\s*$', clean, re.IGNORECASE):
+            continue
+            
+        # Ignorar enlaces y menciones
+        if re.search(r'(https?://|t\.me/|@\w+)', clean, re.IGNORECASE):
+            continue
+            
+        # Ignorar si la línea es puramente hashtags
+        tokens = clean.split()
+        if tokens and all(t.startswith('#') for t in tokens):
+            continue
+            
+        # Ignorar líneas publicitarias conocidas
+        lower = clean.lower()
+        if any(kw in lower for kw in AD_KEYWORDS):
+            continue
+            
+        # Si tiene letras o números y longitud razonable
+        if len(clean) >= 3 and re.search(r'[A-Za-z0-9]', clean):
+            # Eliminar posibles hashtags sueltos al inicio o fin
+            clean = re.sub(r'#\w+', '', clean).strip()
+            # Limpiar caracteres ilegales para nombre de archivo/carpeta
+            clean = re.sub(r'[<>:\"/\\|?*]', '', clean).strip()
+            if len(clean) >= 3:
+                candidates.append(clean)
+                
+    if candidates:
+        # El primer candidato válido suele ser el título o modelo del equipo
+        return candidates[0][:80].strip()
+    return None
+
+
+def extraer_info_archivo(message, parent_filename: str = None) -> tuple[str | None, int, any]:
     """
     Extrae el nombre del archivo, su tamaño en bytes y el objeto multimedia de un mensaje de Telegram.
     Soporta documentos, videos, audios y fotos (MessageMediaPhoto), ignorando stickers y emojis animados.
+    Si parent_filename se proporciona o la foto cita un mensaje, la foto se renombra automáticamente
+    con el nombre del archivo principal (ej: <modelo>_preview.jpg).
     Retorna: (nombre_archivo, tamanio_bytes, media_obj) o (None, 0, None) si no hay contenido válido.
     """
     if not message or not getattr(message, 'media', None):
@@ -208,11 +286,25 @@ def extraer_info_archivo(message) -> tuple[str | None, int, any]:
             elif hasattr(s, 'bytes'):
                 tamanio = max(tamanio, len(s.bytes))
 
-        if message.text:
-            caracteres_validos = " -_()[]"
-            nombre_limpio = "".join(c for c in message.text if c.isalnum() or c in caracteres_validos).strip()[:60]
-            if nombre_limpio:
-                nombre = f"{nombre_limpio} ({message.id}).jpg"
+        # Intentar extraer nombre del equipo desde el texto o texto citado
+        nombre_modelo = None
+        if getattr(message, 'text', None):
+            nombre_modelo = extraer_nombre_de_texto(message.text)
+        if not nombre_modelo:
+            reply_obj = getattr(message, 'reply_to', None)
+            quote_text = getattr(reply_obj, 'quote_text', None) if reply_obj else None
+            if quote_text:
+                nombre_modelo = extraer_nombre_de_texto(quote_text)
+
+        effective_base = parent_filename or nombre_modelo
+        if effective_base:
+            clean_base = clean_filename_for_pack(effective_base)
+            if clean_base:
+                # Si el padre es un documento descargable (rar, zip, bin, etc.) que no es album, es foto preview
+                if parent_filename and re.search(r'\.(rar|zip|7z|tar|gz|cad|brd|bdv|pdf)$', str(parent_filename), re.I):
+                    nombre = f"{clean_base}_preview.jpg"
+                else:
+                    nombre = f"{clean_base} ({message.id}).jpg"
             else:
                 nombre = f"foto_{message.id}.jpg"
         else:

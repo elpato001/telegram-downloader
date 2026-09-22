@@ -90,6 +90,7 @@ def init_db():
             FOREIGN KEY(package_id) REFERENCES grabber_packages(id) ON DELETE CASCADE
         )
     """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_grabber_items_pkg ON grabber_items(package_id)")
 
     # Migración de paquetes existentes en grabber_packages que no tengan channel_name
     try:
@@ -349,22 +350,147 @@ def add_grabber_items(package_id, items):
     conn.commit()
 
 
-def get_all_grabber():
-    """Retorna todos los paquetes y sus archivos en el Capturador de Enlaces."""
+def add_grabber_packages_batch(package_list):
+    """
+    Inserta múltiples paquetes y sus respectivos items en una sola transacción SQLite.
+    package_list: lista de dicts con:
+      - name: str
+      - entity_id: str
+      - custom_dir: str
+      - channel_name: str
+      - items: list de dicts con id/message_id, nombre/filename, tamanio/total_size, fecha
+    Retorna la lista de IDs de paquetes creados.
+    """
+    if not package_list:
+        return []
     conn = _get_conn()
-    packages_rows = conn.execute("SELECT * FROM grabber_packages ORDER BY created_at DESC").fetchall()
+    created_pkg_ids = []
+    for pkg_data in package_list:
+        cur = conn.execute(
+            "INSERT INTO grabber_packages (name, entity_id, custom_dir, channel_name) VALUES (?, ?, ?, ?)",
+            (
+                pkg_data.get("name", "Paquete").strip(),
+                str(pkg_data.get("entity_id", "")),
+                pkg_data.get("custom_dir", "").strip(),
+                pkg_data.get("channel_name", "").strip()
+            )
+        )
+        pkg_id = cur.lastrowid
+        created_pkg_ids.append(pkg_id)
+
+        items = pkg_data.get("items", [])
+        if items:
+            item_rows = [
+                (
+                    pkg_id,
+                    it.get("id") or it.get("message_id") or 0,
+                    str(it.get("entity_id", pkg_data.get("entity_id", ""))),
+                    it.get("nombre") or it.get("filename") or "",
+                    it.get("tamanio") or it.get("total_size") or 0,
+                    it.get("fecha", "")
+                )
+                for it in items
+            ]
+            conn.executemany(
+                "INSERT INTO grabber_items (package_id, message_id, entity_id, filename, total_size, fecha) VALUES (?, ?, ?, ?, ?, ?)",
+                item_rows
+            )
+    conn.commit()
+    return created_pkg_ids
+
+
+def clean_filename_for_pack_db(fname: str) -> str:
+    import re
+    s = re.sub(r'(?i)\.(part\d+|z\d+|7z\.\d+|\d{3})\.(rar|zip|7z|tar|gz)$', '', fname)
+    s = re.sub(r'(?i)\.part\d+\.rar$', '', s)
+    s = re.sub(r'(?i)\.(rar|zip|7z|tar|gz|mp4|mkv|avi|mov|iso|bin|cue|chd|cso|exe|pdf|jpg|jpeg|png|webp|cad|bdv|brd|tvw|fz)$', '', s)
+    s = re.sub(r'(?i)[._ -]part\d+$', '', s)
+    s = re.sub(r'(?i)\.z\d+$', '', s)
+    s = re.sub(r'(?i)[._ -](preview|boardview|schematic|foto)$', '', s)
+    s = re.sub(r'\s*\(\d+\)$', '', s)
+    return s.strip()
+
+
+def get_all_grabber():
+    """Retorna todos los paquetes y sus archivos en el Capturador de Enlaces de forma ultra rápida (1 sola consulta para items)."""
+    conn = _get_conn()
+    packages_rows = conn.execute("SELECT * FROM grabber_packages ORDER BY created_at DESC, id DESC").fetchall()
+    if not packages_rows:
+        return []
+
+    items_rows = conn.execute(
+        "SELECT id, package_id, message_id, entity_id, filename, total_size, fecha FROM grabber_items ORDER BY package_id, id ASC"
+    ).fetchall()
+
+    items_by_pkg = {}
+    for i_row in items_rows:
+        pid = i_row["package_id"]
+        if pid not in items_by_pkg:
+            items_by_pkg[pid] = []
+        items_by_pkg[pid].append(dict(i_row))
+
     packages = []
-    
     for p_row in packages_rows:
         p = dict(p_row)
-        items_rows = conn.execute(
-            "SELECT * FROM grabber_items WHERE package_id = ? ORDER BY id ASC",
-            (p["id"],)
-        ).fetchall()
-        p["items"] = [dict(i) for i in items_rows]
+        p["items"] = items_by_pkg.get(p["id"], [])
         packages.append(p)
-        
+
     return packages
+
+
+def reorganize_grabber_packages():
+    """
+    Reorganiza los items del capturador en paquetes individuales según su modelo/archivo.
+    Agrupa archivos que pertenecen al mismo modelo, partes o esquemático+foto.
+    Retorna la cantidad de paquetes resultantes.
+    """
+    conn = _get_conn()
+    all_packages = conn.execute("SELECT * FROM grabber_packages").fetchall()
+    if not all_packages:
+        return 0
+
+    all_items = conn.execute("SELECT * FROM grabber_items ORDER BY package_id, id ASC").fetchall()
+    if not all_items:
+        return 0
+
+    pkg_map = {p["id"]: dict(p) for p in all_packages}
+
+    # Agrupar items por (entity_id, channel_name, custom_dir, clean_model)
+    groups = {}
+    for it in all_items:
+        p_info = pkg_map.get(it["package_id"], {})
+        entity_id = p_info.get("entity_id") or it["entity_id"] or ""
+        channel_name = p_info.get("channel_name") or ""
+        custom_dir = p_info.get("custom_dir") or ""
+        fn = it["filename"]
+        clean_model = clean_filename_for_pack_db(fn) or fn or "Paquete"
+
+        key = (str(entity_id), str(channel_name), str(custom_dir), clean_model)
+        if key not in groups:
+            groups[key] = []
+        groups[key].append(dict(it))
+
+    # Reemplazar los paquetes existentes de forma atómica
+    conn.execute("DELETE FROM grabber_items")
+    conn.execute("DELETE FROM grabber_packages")
+
+    for (entity_id, channel_name, custom_dir, clean_model), items in groups.items():
+        cur = conn.execute(
+            "INSERT INTO grabber_packages (name, entity_id, custom_dir, channel_name) VALUES (?, ?, ?, ?)",
+            (clean_model, entity_id, custom_dir, channel_name)
+        )
+        new_pkg_id = cur.lastrowid
+        item_rows = [
+            (new_pkg_id, item.get("message_id", 0), item.get("entity_id", entity_id), item.get("filename", ""), item.get("total_size", 0), item.get("fecha", ""))
+            for item in items
+        ]
+        conn.executemany(
+            "INSERT INTO grabber_items (package_id, message_id, entity_id, filename, total_size, fecha) VALUES (?, ?, ?, ?, ?, ?)",
+            item_rows
+        )
+
+    conn.commit()
+    return len(groups)
 
 
 def delete_grabber_package(package_id):

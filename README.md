@@ -73,7 +73,7 @@ Conéctate de forma segura y sin necesidad de crear aplicaciones o tokens de Tel
 ## ✨ Características Principales
 
 - 🗂️ **Sistema de 3 Pestañas Especializadas:**
-  - **Pestaña "Capturador de Enlaces":** Escanea enlaces de distintos canales (públicos, privados `t.me/c/...` o mensajes individuales) y organízalos en paquetes antes de descargar.
+  - **Pestaña "Capturador de Enlaces":** Escanea enlaces de distintos canales (públicos, privados `t.me/c/...` o mensajes individuales), con soporte nativo para **Temas de Foros (Forum Topics)** y **Filtros por Rango de Fechas (Desde/Hasta)** para afinar tus búsquedas. Organízalos en paquetes antes de descargar.
   - **Pestaña "Descargas":** Administra la cola de descargas activas con control de velocidad en tiempo real, pausas y reanudación.
   - **Pestaña "Automatizaciones":** Monitorea canales en segundo plano y descarga automáticamente nuevos archivos que se publiquen con filtros y modos de organización personalizados.
 - 🤖 **Auto-Descarga Autónoma de Canales:**

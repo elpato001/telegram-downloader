@@ -556,6 +556,15 @@ td:first-child, th:first-child {
     padding: 8px 12px;
 }
 
+.date-filter-container {
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.date-filter-container:focus-within {
+    border-color: #6366f1 !important;
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15);
+}
+
 .btn-sm {
     padding: 3px 8px;
     font-size: 11px;
@@ -989,7 +998,7 @@ td:first-child, th:first-child {
 /* Toast Notifications */
 .toast-container { 
     position: fixed; 
-    bottom: 24px; 
+    bottom: 80px; 
     right: 24px; 
     display: flex; 
     flex-direction: column; 

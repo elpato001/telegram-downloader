@@ -284,8 +284,72 @@ const loginModal = document.getElementById('loginModal');
 const scanError = document.getElementById('scanError');
 const channelLink = document.getElementById('channelLink');
 const btnScanSubmit = document.getElementById('btnScanSubmit');
+const scanDatePreset = document.getElementById('scanDatePreset');
+const scanCustomDateRange = document.getElementById('scanCustomDateRange');
+const scanDateFrom = document.getElementById('scanDateFrom');
+const scanDateTo = document.getElementById('scanDateTo');
 const customDirInput = document.getElementById('customDir');
 const chkIncludeDate = document.getElementById('chkIncludeDate');
+
+function formatDateToInput(d) {
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+if (scanDatePreset) {
+    scanDatePreset.addEventListener('change', () => {
+        const val = scanDatePreset.value;
+        const now = new Date();
+        const todayStr = formatDateToInput(now);
+
+        if (val === 'all') {
+            if (scanCustomDateRange) scanCustomDateRange.style.display = 'none';
+            if (scanDateFrom) scanDateFrom.value = '';
+            if (scanDateTo) scanDateTo.value = '';
+        } else if (val === 'today') {
+            if (scanCustomDateRange) scanCustomDateRange.style.display = 'inline-flex';
+            if (scanDateFrom) scanDateFrom.value = todayStr;
+            if (scanDateTo) scanDateTo.value = todayStr;
+        } else if (val === '7days') {
+            if (scanCustomDateRange) scanCustomDateRange.style.display = 'inline-flex';
+            const past7 = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+            if (scanDateFrom) scanDateFrom.value = formatDateToInput(past7);
+            if (scanDateTo) scanDateTo.value = todayStr;
+        } else if (val === '30days') {
+            if (scanCustomDateRange) scanCustomDateRange.style.display = 'inline-flex';
+            const past30 = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+            if (scanDateFrom) scanDateFrom.value = formatDateToInput(past30);
+            if (scanDateTo) scanDateTo.value = todayStr;
+        } else if (val === 'custom') {
+            if (scanCustomDateRange) scanCustomDateRange.style.display = 'inline-flex';
+            if (scanDateTo && !scanDateTo.value) scanDateTo.value = todayStr;
+        }
+    });
+
+    if (scanDateFrom) {
+        scanDateFrom.addEventListener('change', () => {
+            if (scanDatePreset.value !== 'custom' && scanDatePreset.value !== 'all') {
+                scanDatePreset.value = 'custom';
+            }
+        });
+        scanDateFrom.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') btnScanSubmit.click();
+        });
+    }
+
+    if (scanDateTo) {
+        scanDateTo.addEventListener('change', () => {
+            if (scanDatePreset.value !== 'custom' && scanDatePreset.value !== 'all') {
+                scanDatePreset.value = 'custom';
+            }
+        });
+        scanDateTo.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') btnScanSubmit.click();
+        });
+    }
+}
 
 if (chkIncludeDate) {
     chkIncludeDate.checked = localStorage.getItem('telegram_include_date') === 'true';
@@ -1329,18 +1393,44 @@ btnScanSubmit.addEventListener('click', async () => {
     const link = channelLink.value.trim();
     if (!link) return;
     
+    // Validar y obtener rango de fechas
+    const datePreset = scanDatePreset ? scanDatePreset.value : 'all';
+    let dateFromVal = null;
+    let dateToVal = null;
+
+    if (datePreset !== 'all') {
+        if (scanDateFrom && scanDateFrom.value) dateFromVal = scanDateFrom.value.trim();
+        if (scanDateTo && scanDateTo.value) dateToVal = scanDateTo.value.trim();
+
+        if (dateFromVal && dateToVal && dateFromVal > dateToVal) {
+            showToast('La fecha de inicio (Desde) no puede ser posterior a la fecha de fin (Hasta).', 'error');
+            return;
+        }
+    }
+
     scanError.style.display = 'block';
-    scanError.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Escaneando enlace y recolectando archivos, por favor espera...';
+    if (dateFromVal || dateToVal) {
+        const rangeText = (dateFromVal && dateToVal) ? `${dateFromVal} al ${dateToVal}` : (dateFromVal ? `desde ${dateFromVal}` : `hasta ${dateToVal}`);
+        scanError.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Escaneando enlace [${rangeText}], por favor espera...`;
+    } else {
+        scanError.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Escaneando enlace y recolectando archivos, por favor espera...';
+    }
     scanError.style.backgroundColor = '#fff4ce';
     scanError.style.color = '#795548';
     btnScanSubmit.disabled = true;
     
     try {
         const customDir = customDirInput ? customDirInput.value.trim() : '';
+        const payload = {
+            link,
+            custom_dir: customDir,
+            date_from: dateFromVal || null,
+            date_to: dateToVal || null
+        };
         const res = await fetch(`${API_BASE}/scan`, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ link, custom_dir: customDir })
+            body: JSON.stringify(payload)
         });
         const data = await res.json();
         
@@ -1355,7 +1445,11 @@ btnScanSubmit.addEventListener('click', async () => {
             switchMainTab('grabber');
             
             scanError.style.display = 'none';
-            showToast(`✅ Paquete <strong>"${data.package_name}"</strong> añadido al Capturador con ${data.videos ? data.videos.length : 0} archivos.`, 'success');
+            if (data.videos && data.videos.length > 0) {
+                showToast(`✅ Paquete <strong>"${data.package_name}"</strong> añadido al Capturador con ${data.videos.length} archivo(s).`, 'success');
+            } else {
+                showToast(`ℹ️ Escaneo completado: No se encontraron archivos para capturar${dateFromVal || dateToVal ? ' en el rango de fechas seleccionado' : ''}.`, 'info');
+            }
             
             setTimeout(() => {
                 if (scanError.style.backgroundColor === 'rgb(230, 255, 250)') {
@@ -1370,7 +1464,7 @@ btnScanSubmit.addEventListener('click', async () => {
         }
     } catch (e) {
         scanError.style.display = 'none';
-            showToast('Error de red al conectar con el servidor.', 'error');
+        showToast('Error de red al conectar con el servidor.', 'error');
     } finally {
         btnScanSubmit.disabled = false;
     }
@@ -1396,6 +1490,8 @@ const statusSizeGrabber = document.getElementById('statusSizeGrabber');
 const statusPackagesGrabber = document.getElementById('statusPackagesGrabber');
 const infoGrabberText = document.getElementById('infoGrabberText');
 
+let grabberDisplayLimit = 100;
+
 function renderGrabberTable() {
     if (!bodyGrabber) return;
     bodyGrabber.innerHTML = '';
@@ -1413,18 +1509,33 @@ function renderGrabberTable() {
     }
     
     const searchTerm = searchGrabberInput ? searchGrabberInput.value.toLowerCase().trim() : '';
-    let totalGrabberPackagesCount = grabberPackages.length;
     
+    // Filtrar paquetes y sus items
+    const matchingPackages = [];
     grabberPackages.forEach(pkg => {
-        // Filtrar archivos del paquete por formatos permitidos y por búsqueda
+        const pkgNameLower = (pkg.name || '').toLowerCase();
+        const pkgChanLower = (pkg.channel_name || '').toLowerCase();
+        const pkgMatches = !searchTerm || pkgNameLower.includes(searchTerm) || pkgChanLower.includes(searchTerm);
+
         const filteredItems = (pkg.items || []).filter(item => {
             if (!isFormatAllowed(item.filename)) return false;
-            if (searchTerm && !item.filename.toLowerCase().includes(searchTerm)) return false;
+            if (searchTerm && !pkgMatches && !item.filename.toLowerCase().includes(searchTerm)) return false;
             return true;
         });
-        
-        // Si hay búsqueda y este paquete no tiene coincidencias, no mostrarlo
-        if (searchTerm && filteredItems.length === 0) return;
+
+        if (searchTerm && !pkgMatches && filteredItems.length === 0) return;
+        matchingPackages.push({ pkg, filteredItems });
+    });
+
+    if (matchingPackages.length === 0) {
+        bodyGrabber.innerHTML = `<tr><td colspan="6" style="text-align: center; color: #6b7280; padding: 25px;">No se encontraron paquetes que coincidan con la búsqueda.</td></tr>`;
+        updateGrabberSelection();
+        return;
+    }
+
+    const packagesToRender = matchingPackages.slice(0, grabberDisplayLimit);
+    
+    packagesToRender.forEach(({ pkg, filteredItems }) => {
         
         const isExpanded = expandedGrabber.has(pkg.id);
         const pkgSize = filteredItems.reduce((acc, it) => acc + (it.total_size || 0), 0);
@@ -1558,7 +1669,36 @@ function renderGrabberTable() {
             });
         }
     });
-    
+
+    if (matchingPackages.length > packagesToRender.length) {
+        const trMore = document.createElement('tr');
+        trMore.className = 'grabber-pagination-row';
+        trMore.innerHTML = `
+            <td colspan="6" style="text-align: center; padding: 14px; background: #f8fafc; border-top: 1px solid #e2e8f0;">
+                <span style="font-size: 12px; color: #475569; margin-right: 14px; font-weight: 500;">
+                    Mostrando <strong>${packagesToRender.length}</strong> de <strong>${matchingPackages.length.toLocaleString()}</strong> carpetas
+                </span>
+                <button type="button" class="toolbar-btn" id="btnLoadMoreGrabber" style="padding: 4px 14px; font-size: 11px; display: inline-flex; align-items: center; gap: 5px; cursor: pointer;">
+                    <i class="fa-solid fa-arrow-down"></i> Mostrar 100 más
+                </button>
+                <button type="button" class="toolbar-btn" id="btnLoadAllGrabber" style="padding: 4px 14px; font-size: 11px; margin-left: 8px; display: inline-flex; align-items: center; gap: 5px; cursor: pointer;">
+                    Mostrar todas
+                </button>
+            </td>
+        `;
+        bodyGrabber.appendChild(trMore);
+        trMore.querySelector('#btnLoadMoreGrabber').addEventListener('click', (e) => {
+            e.stopPropagation();
+            grabberDisplayLimit += 100;
+            renderGrabberTable();
+        });
+        trMore.querySelector('#btnLoadAllGrabber').addEventListener('click', (e) => {
+            e.stopPropagation();
+            grabberDisplayLimit = matchingPackages.length;
+            renderGrabberTable();
+        });
+    }
+
     updateGrabberSelection();
 }
 
@@ -1592,7 +1732,10 @@ function updateGrabberSelection() {
 }
 
 if (searchGrabberInput) {
-    searchGrabberInput.addEventListener('input', renderGrabberTable);
+    searchGrabberInput.addEventListener('input', () => {
+        grabberDisplayLimit = 100;
+        renderGrabberTable();
+    });
 }
 
 if (selectAllGrabber) {
@@ -2604,6 +2747,37 @@ if (btnStartGrabberDownloads) {
     });
 }
 
+const btnReorganizeGrabber = document.getElementById('btnReorganizeGrabber');
+if (btnReorganizeGrabber) {
+    btnReorganizeGrabber.addEventListener('click', async () => {
+        if (!grabberPackages || grabberPackages.length === 0) {
+            showToast('El Capturador de Enlaces está vacío.', 'info');
+            return;
+        }
+        if (!await showConfirmDialog('¿Deseas reorganizar todos los archivos en carpetas separadas por modelo/esquemático?')) return;
+
+        const origHtml = btnReorganizeGrabber.innerHTML;
+        btnReorganizeGrabber.disabled = true;
+        btnReorganizeGrabber.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Organizando...';
+
+        try {
+            const res = await fetch(`${API_BASE}/grabber/reorganize`, { method: 'POST' });
+            const data = await res.json();
+            if (data.success) {
+                showToast(`¡Listo! Se organizaron los archivos en ${data.packages_count.toLocaleString()} paquetes por modelo.`, 'success');
+                await loadGrabberData();
+            } else {
+                showToast('Error al reorganizar: ' + (data.error || 'Desconocido'), 'error');
+            }
+        } catch (e) {
+            showToast('Error de red al conectar con el servidor: ' + e.message, 'error');
+        } finally {
+            btnReorganizeGrabber.disabled = false;
+            btnReorganizeGrabber.innerHTML = origHtml;
+        }
+    });
+}
+
 if (btnDeleteSelectedGrabber) {
     btnDeleteSelectedGrabber.addEventListener('click', async () => {
         if (selectedGrabberItems.size === 0) {
@@ -3258,6 +3432,9 @@ function getChannelFormatsSummary(fileTypesStr) {
 }
 
 function getChannelSubfolderSummary(mode) {
+    if (mode === 'channel_model') {
+        return { text: 'Canal / Modelo', title: 'Descargas en: Carpeta/NombreCanal/NombreModelo/archivo.ext', icon: 'fa-folder-tree', color: '#059669', bg: '#ecfdf5', border: '#a7f3d0' };
+    }
     if (mode === 'channel_only') {
         return { text: 'Solo Canal', title: 'Descargas en: Carpeta/NombreCanal/archivo.ext', icon: 'fa-folder', color: '#0284c7', bg: '#e0f2fe', border: '#bae6fd' };
     }
@@ -3265,16 +3442,17 @@ function getChannelSubfolderSummary(mode) {
         return { text: 'Plana (Directa)', title: 'Descargas guardadas directamente en la carpeta destino sin subcarpetas', icon: 'fa-file', color: '#475569', bg: '#f1f5f9', border: '#cbd5e1' };
     }
     // Default: channel_date
-    return { text: 'Canal / Fecha', title: 'Descargas en: Carpeta/NombreCanal/DD-MM-YYYY/archivo.ext', icon: 'fa-folder-tree', color: '#4338ca', bg: '#eef2ff', border: '#c7d2fe' };
+    return { text: 'Canal / Fecha', title: 'Descargas en: Carpeta/NombreCanal/DD-MM-YYYY/archivo.ext', icon: 'fa-calendar-days', color: '#4338ca', bg: '#eef2ff', border: '#c7d2fe' };
 }
 
 window.changeAutoChannelSubfolderMode = async function(channelId, currentMode) {
     const nextModes = {
+        'channel_model': 'channel_date',
         'channel_date': 'channel_only',
         'channel_only': 'flat',
-        'flat': 'channel_date'
+        'flat': 'channel_model'
     };
-    const nextMode = nextModes[currentMode] || 'channel_date';
+    const nextMode = nextModes[currentMode] || 'channel_model';
     try {
         const res = await fetch(`${API_BASE}/autochannels/update_subfolder_mode`, {
             method: 'POST',
