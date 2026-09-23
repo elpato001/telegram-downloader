@@ -3331,14 +3331,30 @@ function updatePackageRowUI(pkgName) {
 // 10. WEBSOCKET Y SINCRONIZACIÓN EN TIEMPO REAL
 // ═════════════════════════════════════════════════════════════════════════
 
+let lastWsMessageTime = Date.now();
+
 function connectWebSocket() {
     if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
         return;
     }
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+    try {
+        ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+    } catch (e) {
+        console.warn("Error creando WebSocket:", e);
+        return;
+    }
+
+    ws.onopen = () => {
+        lastWsMessageTime = Date.now();
+    };
+
+    ws.onerror = (err) => {
+        console.warn("WebSocket aviso:", err);
+    };
     
     ws.onmessage = (event) => {
+        lastWsMessageTime = Date.now();
         try {
             const data = JSON.parse(event.data);
             
@@ -3441,12 +3457,40 @@ function connectWebSocket() {
     };
     
     ws.onclose = () => {
-        // Reintentar conexión silenciosamente si la app sigue activa
+        // Reintentar conexión automáticamente
         setTimeout(() => {
-            if (currentMainTab === 'descargas') connectWebSocket();
-        }, 5000);
+            connectWebSocket();
+        }, 2000);
     };
 }
+
+// ─── Mecanismo de Respaldo: Heartbeat y Polling Inteligente ───
+// Si el websocket se corta o no transmite, sincroniza el progreso sin necesidad de F5
+setInterval(async () => {
+    // 1. Keep-alive ping si está conectado
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        try {
+            ws.send("ping");
+        } catch (e) {}
+    } else {
+        connectWebSocket();
+    }
+
+    // 2. Polling de respaldo cuando hay descargas activas o en cola
+    if (currentMainTab === 'descargas') {
+        const hasActive = downloadsData.some(d => {
+            const st = itemStates[d.db_id] || d.state;
+            return st === 'downloading' || st === 'pending';
+        });
+        if (hasActive) {
+            const now = Date.now();
+            // Si el websocket está desconectado o no ha recibido eventos de progreso en 2.5s
+            if (!ws || ws.readyState !== WebSocket.OPEN || (now - lastWsMessageTime > 2500)) {
+                await loadDownloadsData();
+            }
+        }
+    }
+}, 2000);
 
 // ═════════════════════════════════════════════════════════════════════════
 // 11. INICIALIZACIÓN DE LA APLICACIÓN

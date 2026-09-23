@@ -33,8 +33,9 @@ app.mount("/assets", StaticFiles(directory="assets"), name="assets")
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
-    # Proteger todas las rutas /api/ y /ws, excepto /api/login
-    if request.url.path.startswith(("/api/", "/ws")) and request.url.path != "/api/login":
+    # Proteger únicamente rutas HTTP de la API (/api/), excepto /api/login
+    # Las conexiones WebSocket (/ws) se autentican en su propio endpoint
+    if request.url.path.startswith("/api/") and request.url.path != "/api/login":
         auth_cookie = request.cookies.get("auth_token")
         expected_token = hashlib.sha256(APP_PASSWORD.encode()).hexdigest()
         if not auth_cookie or auth_cookie != expected_token:
@@ -89,11 +90,14 @@ class ConnectionManager:
             self.active_connections.remove(websocket)
 
     async def send_json(self, message: dict):
-        for connection in self.active_connections:
+        to_remove = []
+        for connection in list(self.active_connections):
             try:
                 await connection.send_json(message)
-            except:
-                pass
+            except Exception:
+                to_remove.append(connection)
+        for dead in to_remove:
+            self.disconnect(dead)
 
 manager = ConnectionManager()
 
@@ -2706,9 +2710,19 @@ async def process_downloads(db_ids, custom_dir=""):
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    # Validar autenticación si existe contraseña configurada
+    if APP_PASSWORD:
+        auth_cookie = websocket.cookies.get("auth_token")
+        expected_token = hashlib.sha256(APP_PASSWORD.encode()).hexdigest()
+        if auth_cookie and auth_cookie != expected_token:
+            await websocket.close(code=1008)
+            return
+
     await manager.connect(websocket)
     try:
         while True:
-            await websocket.receive_text()
-    except WebSocketDisconnect:
+            data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text("pong")
+    except (WebSocketDisconnect, Exception):
         manager.disconnect(websocket)
