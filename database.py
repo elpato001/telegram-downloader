@@ -5,8 +5,13 @@ Usa SQLite para persistir el estado de las descargas y los paquetes escaneados.
 import sqlite3
 import os
 import threading
+from config import DATA_DIR
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads.db")
+if DATA_DIR and DATA_DIR != ".":
+    os.makedirs(DATA_DIR, exist_ok=True)
+    DB_PATH = os.path.join(DATA_DIR, "downloads.db")
+else:
+    DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads.db")
 
 _local = threading.local()
 

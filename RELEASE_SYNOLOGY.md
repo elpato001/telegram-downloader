@@ -4,39 +4,39 @@ Esta versión (Asset) está pre-configurada para ser instalada directamente en u
 Incluye modificaciones específicas para adaptar la interfaz web a Linux/DSM y un proxy de seguridad integrado (Caddy) para exponerla de forma segura.
 
 ## ✨ Novedades en esta versión
-- 🐳 **`Dockerfile` y `docker-compose.yml` listos para usar**: Integración directa con Container Manager.
-- 🔒 **Protección nativa**: Configurado con `Caddy` para solicitar un usuario y contraseña antes de permitir el acceso.
-- 📂 **Explorador adaptado**: El selector de carpetas ahora navega desde la raíz `/` en lugar de `C:\`, permitiendo explorar todos los volúmenes del NAS de forma nativa.
+- 🐳 **`Dockerfile` y `docker-compose.yml` listos para usar**: Integración directa con Container Manager y volumen persistente `./data` para base de datos y sesión.
+- 🔒 **Protección integrada**: Pantalla de autenticación web protegida por contraseña para evitar accesos no autorizados.
+- 📂 **Explorador adaptado**: El selector de carpetas interactivo navega desde la raíz `/` y `/volume1`, permitiendo explorar y crear carpetas en todos los volúmenes del NAS de forma nativa.
 
 ---
 
 ## 🛠️ Guía de Instalación para Synology DSM
 
 ### 1. Subir los archivos
-1. Descarga el archivo `.zip` de esta versión.
-2. Descomprímelo y sube todo el contenido a una carpeta de tu NAS (por ejemplo: `/volume1/docker/telegram-downloader`).
+1. Descarga el archivo `.zip` del repositorio o clónalo directamente en tu NAS.
+2. Sube todo el contenido a una carpeta de tu NAS (por ejemplo: `/volume1/docker/telegram-downloader`).
 
 ### 2. Levantar el Contenedor
 1. Abre **Container Manager** en tu NAS.
 2. Ve a **Proyecto** > **Crear**.
 3. **Nombre del proyecto:** `telegram-downloader`
-4. **Ruta:** Selecciona la carpeta donde subiste los archivos.
+4. **Ruta:** Selecciona la carpeta donde subiste los archivos (`/volume1/docker/telegram-downloader`).
 5. El sistema detectará automáticamente el archivo `docker-compose.yml`. Dale a Siguiente y Finalizar. El contenedor se construirá y se pondrá en marcha.
 
-*(Por defecto, las descargas irán a la carpeta `/volume1/Descargas Telegram` que puedes cambiar dentro del `docker-compose.yml` si lo prefieres).*
+*(Por defecto, las descargas irán a la carpeta `/volume1/Descargas Telegram` que puedes cambiar dentro del `docker-compose.yml` o elegir libremente desde el explorador web).*
 
 ---
 
 ## 🔐 Configurar el Acceso Seguro (HTTPS) y WebSockets
 
-Para poder usar el certificado seguro de tu NAS (HTTPS) y que los Códigos QR funcionen, debes configurar el **Proxy Inverso de Synology**:
+Para poder usar el certificado seguro de tu NAS (HTTPS) y que los Códigos QR e historial en tiempo real funcionen, debes configurar el **Proxy Inverso de Synology**:
 
 1. Ve a **Panel de control > Portal de inicio de sesión > Avanzado > Proxy inverso**.
 2. Dale a **Crear** y configura la regla:
-   - **Origen:** Protocolo `HTTPS` | Puerto: `8001` (o el que gustes).
+   - **Origen:** Protocolo `HTTPS` | Puerto: `8001` (o el puerto que prefieras).
    - **Destino:** Protocolo `HTTP` | Nombre de host: `localhost` | Puerto: `8000`.
 3. Ve a la pestaña superior **Encabezado personalizado** (Custom Header).
-4. Dale al desplegable **Crear > WebSocket**. *(Se rellenarán automáticamente los campos `Upgrade` y `Connection`. Esto es VITAL para que la app pueda iniciar sesión).*
+4. Dale al desplegable **Crear > WebSocket**. *(Se rellenarán automáticamente los campos `Upgrade` y `Connection`. Esto es VITAL para que la app pueda iniciar sesión vía QR y mostrar el progreso).*
 5. Dale a **Guardar**.
 
 ### 3. Asignar tu Certificado
@@ -50,5 +50,5 @@ Para poder usar el certificado seguro de tu NAS (HTTPS) y que los Códigos QR fu
 Ya puedes acceder desde cualquier navegador escribiendo:
 👉 `https://TU_IP_DEL_NAS:8001`
 
-- Te pedirá un usuario y contraseña iniciales. Por defecto ambos son **`admin`** y **`admin`**.
-- *(Si deseas cambiar la contraseña, puedes seguir las instrucciones dejadas como comentarios dentro del archivo `Caddyfile`).*
+- Al ingresar te solicitará la contraseña de la aplicación. Por defecto es **`admin`**.
+- *(Si deseas cambiar la contraseña, puedes modificar `APP_PASSWORD` en `config.py` o agregar la variable de entorno `APP_PASSWORD: "tu_clave"` en `docker-compose.yml`).*

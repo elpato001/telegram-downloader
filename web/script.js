@@ -2285,7 +2285,7 @@ async function loadDirectory(targetPath = '') {
             }
         }
 
-        // Renderizar unidades de disco (C:\, D:\)
+        // Renderizar unidades de disco o volúmenes (C:\, D:\ o /, /volume1)
         if (folderDrives && data.drives) {
             folderDrives.innerHTML = '';
             data.drives.forEach(drv => {
@@ -2293,10 +2293,15 @@ async function loadDirectory(targetPath = '') {
                 btn.type = 'button';
                 const isCurrentDrive = data.current.toLowerCase().startsWith(drv.toLowerCase());
                 btn.className = `folder-drive-btn ${isCurrentDrive ? 'active' : ''}`;
-                btn.textContent = drv.replace('\\', '');
+                btn.textContent = drv.endsWith('\\') ? drv.replace('\\', '') : drv;
                 btn.addEventListener('click', () => loadDirectory(drv));
                 folderDrives.appendChild(btn);
             });
+        }
+
+        // Ocultar botón de diálogo clásico de Windows si estamos en Linux/Synology
+        if (btnClassicWinDialog && typeof data.is_win !== 'undefined') {
+            btnClassicWinDialog.style.display = data.is_win ? 'inline-flex' : 'none';
         }
 
         // Renderizar subcarpetas o mostrar error de acceso
@@ -2317,8 +2322,15 @@ async function loadDirectory(targetPath = '') {
                 item.className = 'folder-item';
                 item.innerHTML = `<i class="fa-solid fa-folder" style="color: #eab308; font-size: 13px;"></i> <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${sub}</span>`;
                 item.addEventListener('click', () => {
-                    const sep = pickerCurrentPath.endsWith('\\') ? '' : '\\';
-                    const nextPath = pickerCurrentPath + sep + sub;
+                    const isUnix = pickerCurrentPath.startsWith('/') || (!pickerCurrentPath.includes('\\') && pickerCurrentPath.includes('/'));
+                    let nextPath;
+                    if (isUnix) {
+                        const sep = pickerCurrentPath.endsWith('/') ? '' : '/';
+                        nextPath = pickerCurrentPath + sep + sub;
+                    } else {
+                        const sep = pickerCurrentPath.endsWith('\\') ? '' : '\\';
+                        nextPath = pickerCurrentPath + sep + sub;
+                    }
                     loadDirectory(nextPath);
                 });
                 folderList.appendChild(item);

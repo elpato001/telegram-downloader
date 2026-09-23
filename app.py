@@ -21,7 +21,7 @@ from telethon.errors import (
 from telethon.tl.types import DocumentAttributeSticker, DocumentAttributeCustomEmoji, PeerChannel, PeerChat, PeerUser
 from telethon.tl.functions.updates import GetStateRequest
 
-from config import API_ID, API_HASH, SESSION_NAME, DOWNLOAD_DIR, APP_PASSWORD
+from config import API_ID, API_HASH, SESSION_NAME, DOWNLOAD_DIR, APP_PASSWORD, DATA_DIR
 from downloader import obtener_nombre_archivo, formatear_tamanio, es_video, traducir_error_telegram, extraer_info_archivo, es_tipo_archivo_permitido, clean_filename_for_pack, extraer_nombre_de_texto
 import database
 
@@ -663,6 +663,27 @@ async def sync_all_active_channels_on_startup(limit=200):
 @app.on_event("startup")
 async def startup_event():
     global _keepalive_task, client, _previous_app_active_time
+
+    # Si DATA_DIR está en uso y no es '.', migrar automáticamente archivos existentes de la raíz si existen
+    if DATA_DIR and DATA_DIR != ".":
+        try:
+            os.makedirs(DATA_DIR, exist_ok=True)
+            root_db = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads.db")
+            target_db = os.path.join(DATA_DIR, "downloads.db")
+            if os.path.isfile(root_db) and not os.path.exists(target_db):
+                import shutil
+                shutil.copy2(root_db, target_db)
+                logger.info(f"Base de datos migrada a {target_db}")
+
+            root_sess = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mi_sesion.session")
+            target_sess = os.path.join(DATA_DIR, "mi_sesion.session")
+            if os.path.isfile(root_sess) and not os.path.exists(target_sess):
+                import shutil
+                shutil.copy2(root_sess, target_sess)
+                logger.info(f"Archivo de sesión migrado a {target_sess}")
+        except Exception as mig_err:
+            logger.warning(f"Aviso en migración de datos: {mig_err}")
+
     database.init_db()
     # Leer la última vez que la aplicación estuvo activa en la sesión anterior
     _previous_app_active_time = database.get_last_app_active_time()
@@ -1594,17 +1615,19 @@ def get_network_shares():
 @app.get("/api/list_dirs")
 async def list_directories(path: str = ""):
     home = Path.home()
-    common_folders = [
-        {"name": "Descargas", "path": str(home / "Downloads"), "icon": "fa-download"},
-        {"name": "Escritorio", "path": str(home / "Desktop"), "icon": "fa-desktop"},
-        {"name": "Documentos", "path": str(home / "Documents"), "icon": "fa-file-lines"},
-        {"name": "Videos", "path": str(home / "Videos"), "icon": "fa-film"},
-        {"name": "Carpeta del Proyecto", "path": str(Path(DOWNLOAD_DIR).resolve()), "icon": "fa-box-archive"},
-    ]
-    common_folders = [f for f in common_folders if os.path.exists(f["path"])]
+    is_win = sys.platform == 'win32'
 
-    drives = []
-    if sys.platform == 'win32':
+    if is_win:
+        common_folders = [
+            {"name": "Descargas", "path": str(home / "Downloads"), "icon": "fa-download"},
+            {"name": "Escritorio", "path": str(home / "Desktop"), "icon": "fa-desktop"},
+            {"name": "Documentos", "path": str(home / "Documents"), "icon": "fa-file-lines"},
+            {"name": "Videos", "path": str(home / "Videos"), "icon": "fa-film"},
+            {"name": "Carpeta del Proyecto", "path": str(Path(DOWNLOAD_DIR).resolve()), "icon": "fa-box-archive"},
+        ]
+        common_folders = [f for f in common_folders if os.path.exists(f["path"])]
+
+        drives = []
         import string
         from ctypes import windll
         bitmask = windll.kernel32.GetLogicalDrives()
@@ -1614,8 +1637,26 @@ async def list_directories(path: str = ""):
                 if os.path.exists(dp):
                     drives.append(dp)
             bitmask >>= 1
-    if not drives:
-        drives = ["C:\\"]
+        if not drives:
+            drives = ["C:\\"]
+    else:
+        # En Linux / Synology DSM
+        common_folders = [
+            {"name": "Raíz del Sistema (/)", "path": "/", "icon": "fa-server"}
+        ]
+        if os.path.exists("/volume1"):
+            common_folders.append({"name": "Volumen 1 (/volume1)", "path": "/volume1", "icon": "fa-hard-drive"})
+        if os.path.exists("/volume1/Descargas Telegram"):
+            common_folders.append({"name": "Descargas Telegram", "path": "/volume1/Descargas Telegram", "icon": "fa-download"})
+        if os.path.exists(DOWNLOAD_DIR):
+            common_folders.append({"name": "Carpeta Descargas", "path": str(Path(DOWNLOAD_DIR).resolve()), "icon": "fa-box-archive"})
+        common_folders = [f for f in common_folders if os.path.exists(f["path"])]
+
+        drives = ["/"]
+        for v in range(1, 10):
+            vol_path = f"/volume{v}"
+            if os.path.exists(vol_path):
+                drives.append(vol_path)
 
     # Detectar unidades y carpetas de red compartidas (NAS, Samba, etc.)
     network_shares = get_network_shares()
@@ -1630,13 +1671,21 @@ async def list_directories(path: str = ""):
             pass
 
     if not target:
-        downloads = home / "Downloads"
-        if downloads.exists():
-            target = downloads
-        elif drives:
-            target = Path(drives[0])
+        if is_win:
+            downloads = home / "Downloads"
+            if downloads.exists():
+                target = downloads
+            elif drives:
+                target = Path(drives[0])
+            else:
+                target = home
         else:
-            target = home
+            if os.path.exists("/volume1"):
+                target = Path("/volume1")
+            elif os.path.exists(DOWNLOAD_DIR):
+                target = Path(DOWNLOAD_DIR).resolve()
+            else:
+                target = Path("/")
 
     parent_path = str(target.parent) if str(target.parent) != str(target) else None
     
@@ -1666,7 +1715,8 @@ async def list_directories(path: str = ""):
         "current": str(target),
         "parent": parent_path,
         "subdirs": subdirs[:150],
-        "error": error_msg
+        "error": error_msg,
+        "is_win": is_win
     }
 
 @app.post("/api/select_folder")

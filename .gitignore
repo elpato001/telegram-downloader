@@ -7,8 +7,9 @@ mi_sesion.session
 descargas/
 downloads/
 
-# Base de datos local
+# Base de datos local y directorio de datos
 *.db
+data/
 
 # Python
 __pycache__/

@@ -14,13 +14,11 @@ services:
       # Carpeta por defecto donde se guardarán las descargas si no eliges otra
       - "/volume1/Descargas Telegram:/app/descargas"
       
-      # Persistencia de la base de datos de descargas
-      - ./downloads.db:/app/downloads.db
-      
-      # Persistencia de la sesión de Telegram
-      - ./mi_sesion.session:/app/mi_sesion.session
+      # Persistencia de datos (base de datos y sesión de Telegram)
+      - ./data:/app/data
       
     environment:
+      - DATA_DIR=/app/data
       - TZ=America/Argentina/Buenos_Aires
 
   caddy:
