@@ -133,7 +133,7 @@ def init_db():
             channel_name TEXT NOT NULL DEFAULT '',
             custom_dir TEXT NOT NULL DEFAULT '',
             file_types TEXT NOT NULL DEFAULT 'all',
-            subfolder_mode TEXT NOT NULL DEFAULT 'channel_date',
+            subfolder_mode TEXT NOT NULL DEFAULT 'channel_model',
             last_message_id INTEGER NOT NULL DEFAULT 0,
             last_checked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             active INTEGER NOT NULL DEFAULT 1,
@@ -149,7 +149,7 @@ def init_db():
 
     # Migración: Agregar columna subfolder_mode a auto_channels si no existe
     try:
-        conn.execute("ALTER TABLE auto_channels ADD COLUMN subfolder_mode TEXT NOT NULL DEFAULT 'channel_date'")
+        conn.execute("ALTER TABLE auto_channels ADD COLUMN subfolder_mode TEXT NOT NULL DEFAULT 'channel_model'")
     except Exception:
         pass
 
@@ -545,12 +545,12 @@ def get_auto_channel(channel_id):
     row = conn.execute("SELECT * FROM auto_channels WHERE id = ?", (channel_id,)).fetchone()
     return dict(row) if row else None
 
-def add_auto_channel(channel_url, entity_id, channel_name, custom_dir, file_types="all", subfolder_mode="channel_date", last_message_id=0):
+def add_auto_channel(channel_url, entity_id, channel_name, custom_dir, file_types="all", subfolder_mode="channel_model", last_message_id=0):
     """Agrega un nuevo canal a la lista de auto-descargas."""
     conn = _get_conn()
     cursor = conn.execute(
         "INSERT INTO auto_channels (channel_url, entity_id, channel_name, custom_dir, file_types, subfolder_mode, last_message_id, last_checked_at, active) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 1)",
-        (channel_url.strip(), str(entity_id), channel_name.strip(), custom_dir.strip(), (file_types or "all").strip(), (subfolder_mode or "channel_date").strip(), int(last_message_id or 0))
+        (channel_url.strip(), str(entity_id), channel_name.strip(), custom_dir.strip(), (file_types or "all").strip(), (subfolder_mode or "channel_model").strip(), int(last_message_id or 0))
     )
     conn.commit()
     return cursor.lastrowid
@@ -582,7 +582,7 @@ def update_auto_channel_types(channel_id, file_types):
 def update_auto_channel_subfolder_mode(channel_id, subfolder_mode):
     """Actualiza el modo de organización de subcarpetas de un canal automatizado."""
     conn = _get_conn()
-    conn.execute("UPDATE auto_channels SET subfolder_mode = ? WHERE id = ?", ((subfolder_mode or "channel_date").strip(), channel_id))
+    conn.execute("UPDATE auto_channels SET subfolder_mode = ? WHERE id = ?", ((subfolder_mode or "channel_model").strip(), channel_id))
     conn.commit()
 
 def update_auto_channel_last_message(channel_id, last_message_id):

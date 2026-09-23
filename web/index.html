@@ -369,6 +369,28 @@
 
     </div>
 
+    <!-- App Login Modal -->
+    <div class="modal-overlay" id="appLoginModal" style="display: none; z-index: 99999;">
+        <div class="modal" style="width: 440px; max-width: 95vw;">
+            <div class="modal-header" style="display: flex; align-items: center; justify-content: space-between;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <img src="logo.png" alt="Telegram Downloader" style="width: 22px; height: 22px; border-radius: 4px; object-fit: cover;">
+                    <span>Acceso a Telegram Downloader</span>
+                </div>
+            </div>
+            <div class="modal-body" style="padding: 18px 20px;">
+                <p style="margin-bottom: 12px; font-size: 13px; color: #444;">Por favor, ingresa la contraseña para acceder a la interfaz web.</p>
+                <div style="margin-bottom: 10px;">
+                    <input type="password" id="appPasswordInput" placeholder="Contraseña..." class="modal-input" style="padding: 8px 10px; width: 100%; box-sizing: border-box;">
+                </div>
+                <div id="appLoginError" style="color: red; margin-top: 10px; font-size: 12px; display: none;"></div>
+            </div>
+            <div class="modal-footer" style="display: flex; justify-content: flex-end; align-items: center;">
+                <button class="btn primary-btn" id="btnAppLoginSubmit" style="padding: 6px 16px;">Entrar</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Login Modal -->
     <div class="modal-overlay" id="loginModal">
         <div class="modal" id="loginModalBox" style="width: 440px; max-width: 95vw;">

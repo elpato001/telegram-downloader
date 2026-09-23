@@ -9,8 +9,10 @@ from datetime import datetime, timezone, time as dt_time
 from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
+import hashlib
+from fastapi import Request, Response
 from telethon import TelegramClient, events
 from telethon.errors import (
     SessionPasswordNeededError, ChannelPrivateError, ChatAdminRequiredError,
@@ -19,7 +21,7 @@ from telethon.errors import (
 from telethon.tl.types import DocumentAttributeSticker, DocumentAttributeCustomEmoji, PeerChannel, PeerChat, PeerUser
 from telethon.tl.functions.updates import GetStateRequest
 
-from config import API_ID, API_HASH, SESSION_NAME, DOWNLOAD_DIR
+from config import API_ID, API_HASH, SESSION_NAME, DOWNLOAD_DIR, APP_PASSWORD
 from downloader import obtener_nombre_archivo, formatear_tamanio, es_video, traducir_error_telegram, extraer_info_archivo, es_tipo_archivo_permitido, clean_filename_for_pack, extraer_nombre_de_texto
 import database
 
@@ -28,6 +30,38 @@ logger = logging.getLogger("telegram_downloader")
 
 app = FastAPI()
 app.mount("/assets", StaticFiles(directory="assets"), name="assets")
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    # Proteger todas las rutas /api/ y /ws, excepto /api/login
+    if request.url.path.startswith(("/api/", "/ws")) and request.url.path != "/api/login":
+        auth_cookie = request.cookies.get("auth_token")
+        expected_token = hashlib.sha256(APP_PASSWORD.encode()).hexdigest()
+        if not auth_cookie or auth_cookie != expected_token:
+            return JSONResponse(status_code=401, content={"detail": "No autorizado"})
+    return await call_next(request)
+
+class LoginRequest(BaseModel):
+    password: str
+
+@app.post("/api/login")
+async def login(data: LoginRequest, response: Response):
+    if data.password == APP_PASSWORD:
+        token = hashlib.sha256(APP_PASSWORD.encode()).hexdigest()
+        response.set_cookie(
+            key="auth_token",
+            value=token,
+            httponly=True,
+            samesite="lax",
+            max_age=60 * 60 * 24 * 30  # 30 días
+        )
+        return {"success": True}
+    return {"success": False, "error": "Contraseña incorrecta"}
+
+@app.post("/api/logout")
+async def logout(response: Response):
+    response.delete_cookie("auth_token")
+    return {"success": True}
 client = TelegramClient(
     SESSION_NAME, API_ID, API_HASH,
     connection_retries=10,       # Reintentar conexión hasta 10 veces
@@ -213,21 +247,60 @@ async def auto_download_listener(event):
         return
 
     # Extraer información del archivo (nombre, tamaño, objeto media)
+    # Extraer información del archivo (nombre, tamaño, objeto media)
     parent_filename = None
+    parent_pkg_name = None
     rep_id = getattr(msg, 'reply_to_msg_id', None)
     if rep_id:
         parent_dl = database.get_download_by_message(rep_id, matched_chan['entity_id'])
         if parent_dl:
             parent_filename = parent_dl.get('filename')
+            parent_pkg_name = parent_dl.get('package_name')
         else:
             try:
-                parent_msg = await client.get_messages(msg.chat_id, ids=rep_id)
+                # Buscar primero en cache
+                parent_msg = messages_cache.get((str(matched_chan['entity_id']), rep_id))
+                if not parent_msg:
+                    parent_msg = await client.get_messages(msg.chat_id, ids=rep_id)
                 if parent_msg:
                     parent_filename = obtener_nombre_archivo(parent_msg)
             except Exception:
                 pass
 
-    nombre, tamanio, media_obj = extraer_info_archivo(msg, parent_filename=parent_filename)
+    # Extraer modelo/nombre de texto si es un álbum (grouped_id)
+    album_model = None
+    gid = getattr(msg, 'grouped_id', None)
+    if gid:
+        if getattr(msg, 'text', None):
+            album_model = extraer_nombre_de_texto(msg.text)
+        if not album_model:
+            # Buscar en mensajes recientes del mismo álbum en caché
+            for cached_msg in messages_cache.values():
+                if getattr(cached_msg, 'grouped_id', None) == gid and getattr(cached_msg, 'text', None):
+                    album_model = extraer_nombre_de_texto(cached_msg.text)
+                    if album_model:
+                        break
+
+    # Si la foto no tiene reply_to explícito ni texto, verificar si el mensaje adyacente anterior es un documento
+    if not parent_filename and getattr(msg, 'photo', None) and not getattr(msg, 'text', None):
+        try:
+            prev_msg = messages_cache.get((str(matched_chan['entity_id']), msg.id - 1))
+            if not prev_msg:
+                prev_msgs = await client.get_messages(msg.chat_id, ids=[msg.id - 1])
+                prev_msg = prev_msgs[0] if prev_msgs else None
+            if prev_msg and getattr(prev_msg, 'document', None):
+                prev_fn = obtener_nombre_archivo(prev_msg)
+                if prev_fn and re.search(r'\.(rar|zip|7z|tar|gz|cad|brd|bdv|pdf|bin|rom)$', prev_fn, re.I):
+                    parent_filename = prev_fn
+                    prev_dl = database.get_download_by_message(prev_msg.id, matched_chan['entity_id'])
+                    if prev_dl:
+                        parent_pkg_name = prev_dl.get('package_name')
+        except Exception:
+            pass
+
+    effective_parent = parent_filename or album_model
+
+    nombre, tamanio, media_obj = extraer_info_archivo(msg, parent_filename=effective_parent)
     if not nombre or not media_obj:
         return
 
@@ -246,10 +319,19 @@ async def auto_download_listener(event):
     # Guardar en memoria caché para acceso inmediato de descarga
     messages_cache[(str(matched_chan['entity_id']), msg.id)] = msg
 
-    if matched_chan.get('subfolder_mode') == 'channel_model':
-        pkg_name = clean_filename_for_pack(parent_filename or nombre) or matched_chan.get('channel_name') or "Auto-Descargas"
+    channel_name = matched_chan.get('channel_name') or "Auto-Descargas"
+    sub_mode = matched_chan.get('subfolder_mode') or 'channel_model'
+    if sub_mode == 'channel_model':
+        if parent_pkg_name and not re.match(r'^(foto|preview|archivo|video|image)(_\d+)?$', str(parent_pkg_name), re.I):
+            pkg_name = parent_pkg_name
+        else:
+            base_pack = clean_filename_for_pack(effective_parent or nombre)
+            if base_pack and not re.match(r'^(foto|preview|archivo|video|image)(_\d+)?$', base_pack, re.I):
+                pkg_name = base_pack
+            else:
+                pkg_name = channel_name
     else:
-        pkg_name = matched_chan.get('channel_name') or "Auto-Descargas"
+        pkg_name = channel_name
 
     db_id = database.add_download(
         message_id=msg.id,
@@ -258,8 +340,8 @@ async def auto_download_listener(event):
         total_size=tamanio,
         custom_dir=matched_chan.get('custom_dir', ''),
         package_name=pkg_name,
-        channel_name=matched_chan.get('channel_name', ''),
-        fecha=msg.date.strftime("%d-%m-%Y - %H-%M") if msg.date else ""
+        channel_name=channel_name,
+        fecha=msg.date.isoformat() if msg.date else ""
     )
 
     logger.info(f"[Auto-Descarga] Nuevo archivo detectado en {pkg_name}: {nombre} ({tamanio} bytes). DB ID: {db_id}")
@@ -283,7 +365,7 @@ def setup_auto_download_listener(tg_client):
 async def scan_and_enqueue_channel(entity, matched_chan, limit=200, only_new=True, download_all_existing=False, since_time=None):
     """
     Escanea un canal y encola para descarga los archivos multimedia que aún no se hayan descargado.
-    Si only_new es True, solo busca mensajes con ID superior a last_message_id y/o fecha posterior a since_time.
+    Agrupa los archivos en paquetes lógicos por modelo/publicación igual que el Capturador de Enlaces.
     """
     try:
         new_db_ids = []
@@ -325,10 +407,13 @@ async def scan_and_enqueue_channel(entity, matched_chan, limit=200, only_new=Tru
         iter_kwargs = {}
         if only_new and last_msg_id > 0:
             iter_kwargs['min_id'] = last_msg_id
+        elif download_all_existing:
+            iter_kwargs['limit'] = None  # Escanear todos los mensajes del canal, igual que en el Capturador
         elif limit:
             iter_kwargs['limit'] = limit
 
         highest_seen_id = last_msg_id
+        raw_messages = []
 
         async for msg in client.iter_messages(entity, **iter_kwargs):
             if not msg:
@@ -354,40 +439,103 @@ async def scan_and_enqueue_channel(entity, matched_chan, limit=200, only_new=Tru
             if not getattr(msg, 'media', None):
                 continue
 
-            nombre, tamanio, media_obj = extraer_info_archivo(msg)
+            # Ignorar stickers y emojis animados
+            if getattr(msg, 'document', None):
+                attrs = getattr(msg.document, 'attributes', [])
+                if any(isinstance(a, (DocumentAttributeSticker, DocumentAttributeCustomEmoji)) for a in attrs):
+                    continue
+
+            raw_messages.append(msg)
+
+        # Mapear mensajes por ID para poder resolver nombres de respuestas/fotos
+        msgs_map = {m.id: m for m in raw_messages}
+
+        # Mapear textos de álbumes (grouped_id) para propagar el modelo a todas las fotos del álbum
+        album_model_names = {}
+        for m in raw_messages:
+            gid = getattr(m, 'grouped_id', None)
+            if gid and getattr(m, 'text', None) and gid not in album_model_names:
+                extracted = extraer_nombre_de_texto(m.text)
+                if extracted:
+                    album_model_names[gid] = extracted
+
+        videos = []
+        file_types = matched_chan.get('file_types', 'all') or 'all'
+
+        for message in raw_messages:
+            # Verificar si ya existe en la base de datos
+            existente = database.get_download_by_message(message.id, entity_id)
+            if existente:
+                continue
+
+            parent_fn = None
+            rep_id = getattr(message, 'reply_to_msg_id', None)
+            if rep_id and rep_id in msgs_map:
+                parent_fn = obtener_nombre_archivo(msgs_map[rep_id])
+            elif rep_id:
+                parent_dl = database.get_download_by_message(rep_id, entity_id)
+                if parent_dl:
+                    parent_fn = parent_dl.get('filename')
+
+            # Si la foto no tiene reply_to explícito ni texto, verificar si el mensaje adyacente en msgs_map es un documento
+            if not parent_fn and getattr(message, 'photo', None) and not getattr(message, 'text', None):
+                for adj_id in (message.id - 1, message.id + 1):
+                    if adj_id in msgs_map and getattr(msgs_map[adj_id], 'document', None):
+                        adj_fn = obtener_nombre_archivo(msgs_map[adj_id])
+                        if adj_fn and re.search(r'\.(rar|zip|7z|tar|gz|cad|brd|bdv|pdf|bin|rom)$', adj_fn, re.I):
+                            parent_fn = adj_fn
+                            break
+
+            gid = getattr(message, 'grouped_id', None)
+            album_model = album_model_names.get(gid) if gid else None
+            effective_parent = parent_fn or album_model
+
+            nombre, tamanio, media_obj = extraer_info_archivo(message, parent_filename=effective_parent)
             if not nombre or not media_obj:
                 continue
 
             # Filtrar por tipo de archivo según configuración del canal
-            file_types = matched_chan.get('file_types', 'all') or 'all'
-            if not es_tipo_archivo_permitido(nombre, msg, file_types):
+            if not es_tipo_archivo_permitido(nombre, message, file_types):
                 logger.info(f"[Scan-Canal] OMITIDO por filtro ({file_types}): {nombre}")
                 continue
 
-            # Verificar si ya existe en la base de datos
-            existente = database.get_download_by_message(msg.id, entity_id)
-            if existente:
-                continue
+            videos.append({
+                "id": message.id,
+                "nombre": nombre,
+                "tamanio": tamanio,
+                "tamanio_fmt": formatear_tamanio(tamanio),
+                "fecha": message.date.isoformat() if message.date else "",
+                "carpeta": channel_name,
+                "entity_id": str(entity_id),
+                "message": message,
+                "reply_to_id": rep_id,
+                "grouped_id": gid
+            })
 
-            # Guardar en memoria caché
-            messages_cache[(entity_id, msg.id)] = msg
+        # Cachear los objetos message de telethon
+        for v in videos:
+            messages_cache[(str(entity_id), v["id"])] = v["message"]
 
-            if matched_chan.get('subfolder_mode') == 'channel_model':
-                pkg_name = clean_filename_for_pack(nombre) or channel_name
-            else:
-                pkg_name = channel_name
+        # Agrupar inteligentemente en paquetes por modelo/publicación
+        package_list = group_items_into_packages(videos, channel_name, custom_dir, str(entity_id))
 
-            db_id = database.add_download(
-                message_id=msg.id,
-                entity_id=entity_id,
-                filename=nombre,
-                total_size=tamanio,
-                custom_dir=custom_dir,
-                package_name=pkg_name,
-                channel_name=channel_name,
-                fecha=msg.date.strftime("%d-%m-%Y - %H-%M") if msg.date else ""
-            )
-            new_db_ids.append(db_id)
+        # Registrar descargas organizadas por paquete
+        sub_mode = matched_chan.get('subfolder_mode') or 'channel_model'
+        for pkg in package_list:
+            pkg_name = pkg["name"] if sub_mode == 'channel_model' else channel_name
+            for it in pkg["items"]:
+                db_id = database.add_download(
+                    message_id=it["id"],
+                    entity_id=str(entity_id),
+                    filename=it["nombre"],
+                    total_size=it["tamanio"],
+                    custom_dir=custom_dir,
+                    file_path="",
+                    package_name=pkg_name,
+                    channel_name=channel_name,
+                    fecha=it.get("fecha", "")
+                )
+                new_db_ids.append(db_id)
 
         # Actualizar last_message_id del canal
         if channel_db_id:
@@ -406,7 +554,7 @@ async def scan_and_enqueue_channel(entity, matched_chan, limit=200, only_new=Tru
             if only_new:
                 _pending_auto_downloads.update(new_db_ids)
                 _auto_download_total_queued += len(new_db_ids)
-            logger.info(f"[Auto-Descargas] Encolados {len(new_db_ids)} archivos nuevos para el canal {channel_name}")
+            logger.info(f"[Auto-Descargas] Encolados {len(new_db_ids)} archivos nuevos para el canal '{channel_name}' en {len(package_list)} paquete(s)")
             asyncio.create_task(process_downloads(new_db_ids, custom_dir))
             await manager.send_json({"type": "history_update"})
 
@@ -749,17 +897,16 @@ def group_items_into_packages(videos: list[dict], chat_name: str, custom_dir: st
             else:
                 albums[gid] = v["id"]
 
-    # 3. Unir por nombre base de partes (ej: part1, part2)
-    parts = {}
+    # 3. Unir por nombre base de modelo / partes (ej: part1, part2, o preview y archivo principal)
+    base_names = {}
     for v in videos:
-        fn_lower = v["nombre"].lower()
-        if "part" in fn_lower or ".z" in fn_lower or ".7z." in fn_lower:
-            cleaned = clean_filename_for_pack(v["nombre"])
-            if cleaned:
-                if cleaned in parts:
-                    union(parts[cleaned], v["id"])
-                else:
-                    parts[cleaned] = v["id"]
+        cleaned = clean_filename_for_pack(v["nombre"])
+        if cleaned and len(cleaned) >= 3 and not re.match(r'^(foto|preview|archivo|video|image)(_\d+)?$', cleaned, re.I):
+            cleaned_key = cleaned.lower()
+            if cleaned_key in base_names:
+                union(base_names[cleaned_key], v["id"])
+            else:
+                base_names[cleaned_key] = v["id"]
 
     # 4. Construir los grupos resultantes
     groups = {}
@@ -787,7 +934,7 @@ def group_items_into_packages(videos: list[dict], chat_name: str, custom_dir: st
 
         pkg_name = clean_filename_for_pack(main_item["nombre"]) or main_item["nombre"]
         pkg_name = re.sub(r'[<>:"/\\|?*]', '', pkg_name).strip()
-        if not pkg_name:
+        if not pkg_name or re.match(r'^(foto|preview|archivo|image)_\d+$', pkg_name, re.I):
             pkg_name = chat_name
 
         # Asignar la carpeta al item para compatibilidad
@@ -2001,7 +2148,7 @@ class AutoChannelReq(BaseModel):
     custom_dir: str = ""
     download_existing: bool = True
     file_types: str = "all"
-    subfolder_mode: str = "channel_date"
+    subfolder_mode: str = "channel_model"
 
 @app.get("/api/autochannels")
 async def api_get_autochannels():
@@ -2099,7 +2246,7 @@ async def api_update_autochannel_types(req: dict):
 @app.post("/api/autochannels/update_subfolder_mode")
 async def api_update_autochannel_subfolder_mode(req: dict):
     channel_id = req.get("id")
-    mode = req.get("subfolder_mode", "channel_date")
+    mode = req.get("subfolder_mode", "channel_model")
     if channel_id is not None:
         database.update_auto_channel_subfolder_mode(channel_id, mode)
         return {"status": "ok"}
@@ -2210,7 +2357,7 @@ async def process_downloads(db_ids, custom_dir=""):
             dest_root = item.custom_dir.strip() if getattr(item, 'custom_dir', None) and item.custom_dir.strip() else base_dir
             
             # Determinar si pertenece a un canal automatizado y su modo de subcarpetas
-            subfolder_mode = "channel_date"
+            subfolder_mode = "channel_model"
             is_auto_channel = False
             auto_chans = database.get_auto_channels()
             clean_item_entity = str(item.entity_id or '').lstrip('-')
@@ -2223,7 +2370,7 @@ async def process_downloads(db_ids, custom_dir=""):
                     ac_entity = ac_entity[3:]
                 if ac_entity and ac_entity == clean_item_entity:
                     is_auto_channel = True
-                    subfolder_mode = ac.get('subfolder_mode') or 'channel_date'
+                    subfolder_mode = ac.get('subfolder_mode') or 'channel_model'
                     if not canal and ac.get('channel_name'):
                         canal = re.sub(r'[<>:"/\\|?*]', '', str(ac.get('channel_name'))).strip()
                     break
@@ -2237,8 +2384,10 @@ async def process_downloads(db_ids, custom_dir=""):
                         download_dir = Path(dest_root) / fecha_folder
                 elif subfolder_mode == 'channel_model':
                     model_folder = re.sub(r'[<>:"/\\|?*]', '', carpeta or clean_filename_for_pack(nombre) or "General").strip()
-                    if canal:
+                    if canal and model_folder and canal.lower() != model_folder.lower() and model_folder.lower() != "descargas":
                         download_dir = Path(dest_root) / canal / model_folder
+                    elif canal:
+                        download_dir = Path(dest_root) / canal
                     else:
                         download_dir = Path(dest_root) / model_folder
                 elif subfolder_mode == 'channel_only':

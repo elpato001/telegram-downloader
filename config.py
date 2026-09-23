@@ -11,6 +11,9 @@ DOWNLOAD_DIR = "./descargas"
 # Nombre del archivo de sesión (se crea automáticamente)
 SESSION_NAME = "mi_sesion"
 
+# Contraseña para acceder a la interfaz web (por defecto: admin)
+APP_PASSWORD = "admin"
+
 # Extensiones de video reconocidas
 VIDEO_EXTENSIONS = (
     ".mkv", ".mp4", ".avi", ".mov", ".webm",

@@ -1,3 +1,53 @@
+const originalFetch = window.fetch;
+window.fetch = async function(...args) {
+    const response = await originalFetch(...args);
+    if (response.status === 401 && !args[0].includes('/api/login')) {
+        const modal = document.getElementById('appLoginModal');
+        if (modal) modal.style.display = 'flex';
+    }
+    return response;
+};
+
+document.addEventListener('DOMContentLoaded', () => {
+    const appLoginModal = document.getElementById('appLoginModal');
+    const appPasswordInput = document.getElementById('appPasswordInput');
+    const btnAppLoginSubmit = document.getElementById('btnAppLoginSubmit');
+    const appLoginError = document.getElementById('appLoginError');
+
+    const handleAppLogin = async () => {
+        if (!appLoginError) return;
+        appLoginError.style.display = 'none';
+        btnAppLoginSubmit.disabled = true;
+        btnAppLoginSubmit.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i>';
+        
+        try {
+            const res = await originalFetch('/api/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password: appPasswordInput.value })
+            });
+            const data = await res.json();
+            if (data.success) {
+                appLoginModal.style.display = 'none';
+                window.location.reload(); // Recargar para obtener los datos iniciales
+            } else {
+                appLoginError.textContent = data.error || "Error de inicio de sesión";
+                appLoginError.style.display = 'block';
+            }
+        } catch (e) {
+            appLoginError.textContent = "Error de red";
+            appLoginError.style.display = 'block';
+        } finally {
+            btnAppLoginSubmit.disabled = false;
+            btnAppLoginSubmit.textContent = 'Entrar';
+        }
+    };
+
+    btnAppLoginSubmit?.addEventListener('click', handleAppLogin);
+    appPasswordInput?.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') handleAppLogin();
+    });
+});
 
 const countriesData = [
     { code: 'ar', name: 'Argentina (+54)', val: '+54' },
@@ -3494,7 +3544,7 @@ function renderAutoChannels(channels) {
         const badgeColor = fmtInfo.isAll ? '#0284c7' : '#059669';
         const badgeBg = fmtInfo.isAll ? '#e0f2fe' : '#ecfdf5';
         const badgeBorder = fmtInfo.isAll ? '#bae6fd' : '#a7f3d0';
-        const subInfo = getChannelSubfolderSummary(ch.subfolder_mode || 'channel_date');
+        const subInfo = getChannelSubfolderSummary(ch.subfolder_mode || 'channel_model');
 
         tr.innerHTML = `
             <td style="font-weight: 500;">
@@ -3513,7 +3563,7 @@ function renderAutoChannels(channels) {
                 <span title="${subInfo.title}" style="display: inline-flex; align-items: center; gap: 4px; color: ${subInfo.color}; font-weight: 600; background: ${subInfo.bg}; border: 1px solid ${subInfo.border}; padding: 2px 6px; border-radius: 4px;">
                     <i class="fa-solid ${subInfo.icon}"></i> ${subInfo.text}
                 </span>
-                <button type="button" class="action-icon" onclick="changeAutoChannelSubfolderMode(${ch.id}, '${ch.subfolder_mode || 'channel_date'}')" title="Cambiar modo de organización (clic para alternar)" style="margin-left: 6px; font-size: 11px; color: #4338ca;">
+                <button type="button" class="action-icon" onclick="changeAutoChannelSubfolderMode(${ch.id}, '${ch.subfolder_mode || 'channel_model'}')" title="Cambiar modo de organización (clic para alternar)" style="margin-left: 6px; font-size: 11px; color: #4338ca;">
                     <i class="fa-solid fa-arrows-rotate"></i>
                 </button>
             </td>
@@ -3620,7 +3670,7 @@ async function addAutoChannel() {
     try {
         const downloadExisting = chkExisting ? chkExisting.checked : true;
         const subfolderSelect = document.getElementById('autoChannelSubfolderMode');
-        const subfolderMode = subfolderSelect ? subfolderSelect.value : 'channel_date';
+        const subfolderMode = subfolderSelect ? subfolderSelect.value : 'channel_model';
 
         const res = await fetch(`${API_BASE}/autochannels/add`, {
             method: 'POST',
@@ -3638,7 +3688,7 @@ async function addAutoChannel() {
         if (data.status === 'ok') {
             input.value = '';
             dirInput.value = '';
-            if (subfolderSelect) subfolderSelect.value = 'channel_date';
+            if (subfolderSelect) subfolderSelect.value = 'channel_model';
             newChannelAcceptAllFormats = true;
             newChannelActiveFormats = [...DEFAULT_ACTIVE_FORMATS];
             updateAutoChannelFormatsSummaryUI();
