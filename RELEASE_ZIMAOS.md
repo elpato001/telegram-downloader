@@ -4,26 +4,39 @@ Esta guía explica cómo desplegar **Telegram Downloader** en un sistema **ZimaO
 
 ---
 
-## 🚀 Método 1: Instalación rápida por Terminal / SSH (Recomendado)
+## 🖥️ Método 1: Instalación 100% Gráfica desde la interfaz de ZimaOS (Recomendado)
 
-Dado que la aplicación incluye su propio `Dockerfile` y proxy seguro `Caddy`, compilarla y ejecutarla mediante Docker Compose es directo:
+No necesitas usar SSH ni abrir ninguna terminal:
 
-### 1. Conéctate a la terminal de ZimaOS
-- Puedes usar **SSH** desde tu PC (`ssh casaos@IP_DE_TU_ZIMAOS`).
-- O ingresar a la **Terminal web** de ZimaOS (en *Settings > Terminal & Logs*).
+1. En el Dashboard de ZimaOS, haz clic en el botón **`+`** (arriba a la derecha) y selecciona **"Install a customised app"** (o en la *App Store* ➔ *Custom Install*).
+2. En la esquina superior derecha de la ventana, haz clic en el icono **"Import"** (icono de documento con flecha).
+3. Pega el contenido de `docker-compose.zimaos.yml`:
 
-### 2. Clona el repositorio y entra en la carpeta
-```bash
-cd /DATA/AppData
-git clone https://github.com/elpato001/telegram-downloader.git
-cd telegram-downloader
+```yaml
+name: telegram-downloader
+services:
+  telegram-downloader:
+    image: ghcr.io/elpato001/telegram-downloader:latest
+    container_name: telegram-downloader
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - /DATA:/DATA
+      - /media:/media
+      - /DATA/AppData/telegram-downloader/data:/app/data
+      - /DATA/AppData/telegram-downloader/descargas:/app/descargas
+    environment:
+      - DATA_DIR=/app/data
+      - TZ=America/Argentina/Buenos_Aires
 ```
 
-### 3. Inicia la aplicación con Docker Compose
-```bash
-docker compose -f docker-compose.zimaos.yml up -d --build
-```
-*(Docker descargará las dependencias, compilará la imagen y levantará el servicio en segundo plano).*
+4. Haz clic en **Submit**. ZimaOS cargará automáticamente el nombre, icono, puertos y volúmenes.
+5. Haz clic en **Install** y ZimaOS lo descargará y dejará listo con su icono en el escritorio.
+
+---
+
+## 🚀 Método 2: Instalación por Terminal / SSH
 
 ### 4. Acceder a la aplicación
 Abre tu navegador e ingresa a:
