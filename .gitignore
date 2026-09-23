@@ -4,12 +4,14 @@
 mi_sesion.session
 
 # Carpeta de descargas
-descargas/
+descargas/*
+!descargas/.gitkeep
 downloads/
 
 # Base de datos local y directorio de datos
 *.db
-data/
+data/*
+!data/.gitkeep
 
 # Python
 __pycache__/

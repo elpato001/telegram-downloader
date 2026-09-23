@@ -15,6 +15,7 @@ Incluye modificaciones específicas para adaptar la interfaz web a Linux/DSM y u
 ### 1. Subir los archivos
 1. Descarga el archivo `.zip` del repositorio o clónalo directamente en tu NAS.
 2. Sube todo el contenido a una carpeta de tu NAS (por ejemplo: `/volume1/docker/telegram-downloader`).
+3. **Importante:** Asegúrate de que exista la subcarpeta `data` dentro de `/volume1/docker/telegram-downloader/` (si no existe, créala desde File Station). Synology DSM requiere que las carpetas mapeadas existan previamente en el host.
 
 ### 2. Levantar el Contenedor
 1. Abre **Container Manager** en tu NAS.
@@ -23,7 +24,7 @@ Incluye modificaciones específicas para adaptar la interfaz web a Linux/DSM y u
 4. **Ruta:** Selecciona la carpeta donde subiste los archivos (`/volume1/docker/telegram-downloader`).
 5. El sistema detectará automáticamente el archivo `docker-compose.yml`. Dale a Siguiente y Finalizar. El contenedor se construirá y se pondrá en marcha.
 
-*(Por defecto, las descargas irán a la carpeta `/volume1/Descargas Telegram` que puedes cambiar dentro del `docker-compose.yml` o elegir libremente desde el explorador web).*
+> 💡 **Nota sobre las descargas:** Por defecto, el archivo `docker-compose.yml` mapea `/volume1/Descargas Telegram`. Si aún no tienes esa carpeta compartida en tu NAS, créala desde **Panel de control > Carpeta compartida**, o edita `docker-compose.yml` para apuntar a otra carpeta que ya tengas. De lo contrario, Container Manager mostrará un error similar.
 
 ---
 
