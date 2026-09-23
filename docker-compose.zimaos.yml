@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  telegram-downloader:
+    build: .
+    container_name: telegram-downloader
+    restart: unless-stopped
+    expose:
+      - "8000"
+    volumes:
+      # Acceso al almacenamiento principal y discos en ZimaOS / CasaOS
+      - /DATA:/DATA
+      - /media:/media
+      
+      # Carpeta por defecto para descargas (o puedes elegir cualquier carpeta desde la web)
+      - ./descargas:/app/descargas
+      
+      # Persistencia de datos (base de datos y sesión de Telegram)
+      - ./data:/app/data
+      
+    environment:
+      - DATA_DIR=/app/data
+      - TZ=America/Argentina/Buenos_Aires
+
+  caddy:
+    image: caddy:alpine
+    container_name: telegram-proxy
+    restart: unless-stopped
+    ports:
+      - "8000:80"
+    depends_on:
+      - telegram-downloader
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+
+x-casaos:
+  architectures:
+    - amd64
+    - arm64
+  main: caddy
+  icon: https://raw.githubusercontent.com/elpato001/telegram-downloader/main/assets/logo.png
+  title:
+    en_us: Telegram Downloader
+    es_es: Telegram Downloader
+  port_map: "8000"
+  scheme: http
+  description:
+    en_us: Web-based Telegram Media Downloader with QR login, batch downloads, and disk browser.
+    es_es: Descargador web de archivos de Telegram con QR, descargas masivas y explorador de discos.

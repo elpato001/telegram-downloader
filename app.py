@@ -1640,7 +1640,7 @@ async def list_directories(path: str = ""):
         if not drives:
             drives = ["C:\\"]
     else:
-        # En Linux / Synology DSM
+        # En Linux / Synology DSM / ZimaOS / CasaOS
         common_folders = [
             {"name": "Raíz del Sistema (/)", "path": "/", "icon": "fa-server"}
         ]
@@ -1648,6 +1648,10 @@ async def list_directories(path: str = ""):
             common_folders.append({"name": "Volumen 1 (/volume1)", "path": "/volume1", "icon": "fa-hard-drive"})
         if os.path.exists("/volume1/Descargas Telegram"):
             common_folders.append({"name": "Descargas Telegram", "path": "/volume1/Descargas Telegram", "icon": "fa-download"})
+        if os.path.exists("/DATA"):
+            common_folders.append({"name": "Almacenamiento (/DATA)", "path": "/DATA", "icon": "fa-hard-drive"})
+        if os.path.exists("/media"):
+            common_folders.append({"name": "Medios (/media)", "path": "/media", "icon": "fa-photo-film"})
         if os.path.exists(DOWNLOAD_DIR):
             common_folders.append({"name": "Carpeta Descargas", "path": str(Path(DOWNLOAD_DIR).resolve()), "icon": "fa-box-archive"})
         common_folders = [f for f in common_folders if os.path.exists(f["path"])]
@@ -1657,6 +1661,10 @@ async def list_directories(path: str = ""):
             vol_path = f"/volume{v}"
             if os.path.exists(vol_path):
                 drives.append(vol_path)
+        if os.path.exists("/DATA"):
+            drives.append("/DATA")
+        if os.path.exists("/media"):
+            drives.append("/media")
 
     # Detectar unidades y carpetas de red compartidas (NAS, Samba, etc.)
     network_shares = get_network_shares()
@@ -1682,6 +1690,8 @@ async def list_directories(path: str = ""):
         else:
             if os.path.exists("/volume1"):
                 target = Path("/volume1")
+            elif os.path.exists("/DATA"):
+                target = Path("/DATA")
             elif os.path.exists(DOWNLOAD_DIR):
                 target = Path(DOWNLOAD_DIR).resolve()
             else:
