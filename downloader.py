@@ -107,6 +107,10 @@ def traducir_error_telegram(e: Exception) -> str:
     if "connection" in err_str.lower() or "timeout" in err_str.lower() or "timed out" in err_str.lower():
         return "Error de conexión con los servidores de Telegram. Comprobá tu conexión a internet."
 
+    if "no space left on device" in err_str.lower() or (isinstance(e, OSError) and getattr(e, 'errno', None) == 28):
+        return "Espacio insuficiente en el disco. No hay suficiente espacio libre para descargar este archivo."
+
+
     # Traducciones auxiliares de términos comunes
     traducido = err_str
     reemplazos = [
@@ -482,16 +486,42 @@ class DescargadorTelegram:
         thread_id = None
         mensaje_id = None
 
-        # Soportar links directos a mensajes (ej: https://t.me/RetroParaTodosPSX/349 o t.me/c/123/456)
+        # Soportar links directos a mensajes (ej: https://t.me/RetroParaTodosPSX/349 o t.me/c/123/456 o t.me/c/123/9901/79203)
         import re
-        match_msg = re.search(r't\.me/(?:c/)?([^/]+)/(\d+)', canal_input)
-        if match_msg:
-            canal_input = match_msg.group(1)
-            # Si es un número (formato t.me/c/12345/67), agregar el prefijo -100
-            if canal_input.isdigit():
-                canal_input = int("-100" + canal_input)
-            mensaje_id = int(match_msg.group(2))
+        url_clean = canal_input.split('?')[0].split('#')[0].rstrip('/')
+
+        # Si es un enlace de tipo privado t.me/c/...
+        m_priv_topic_msg = re.search(r't\.me/c/(\d+)/(\d+)/(\d+)$', url_clean)
+        m_priv_msg = re.search(r't\.me/c/(\d+)/(\d+)$', url_clean)
+        m_priv_chan = re.search(r't\.me/c/(\d+)$', url_clean)
+
+        # Si es un enlace de tipo público t.me/username/...
+        m_pub_topic_msg = re.search(r't\.me/([a-zA-Z0-9_]+)/(\d+)/(\d+)$', url_clean)
+        m_pub_msg = re.search(r't\.me/([a-zA-Z0-9_]+)/(\d+)$', url_clean)
+        m_pub_chan = re.search(r't\.me/([a-zA-Z0-9_]+)/?$', url_clean)
+
+        if m_priv_topic_msg:
+            canal_input = int("-100" + m_priv_topic_msg.group(1))
+            thread_id = int(m_priv_topic_msg.group(2))
+            mensaje_id = int(m_priv_topic_msg.group(3))
+            print(f"   (Detectado mensaje {mensaje_id} en tema/foro {thread_id})")
+        elif m_priv_msg:
+            canal_input = int("-100" + m_priv_msg.group(1))
+            mensaje_id = int(m_priv_msg.group(2))
             print(f"   (Detectado enlace a archivo específico: {mensaje_id})")
+        elif m_priv_chan:
+            canal_input = int("-100" + m_priv_chan.group(1))
+        elif m_pub_topic_msg:
+            canal_input = m_pub_topic_msg.group(1)
+            thread_id = int(m_pub_topic_msg.group(2))
+            mensaje_id = int(m_pub_topic_msg.group(3))
+            print(f"   (Detectado mensaje {mensaje_id} en tema/foro {thread_id})")
+        elif m_pub_msg:
+            canal_input = m_pub_msg.group(1)
+            mensaje_id = int(m_pub_msg.group(2))
+            print(f"   (Detectado enlace a archivo específico: {mensaje_id})")
+        elif m_pub_chan:
+            canal_input = m_pub_chan.group(1)
         # Soportar formato ID_THREAD (ej: -1002172483151_2693)
         elif "_" in canal_input:
             partes = canal_input.split("_", 1)
@@ -501,10 +531,6 @@ class DescargadorTelegram:
                 print(f"   (Detectado sub-tema o hilo: {thread_id})")
             except ValueError:
                 pass
-        elif isinstance(canal_input, str):
-            match_chan = re.search(r'(?:https?://)?(?:www\.)?t\.me/([^/?#]+)/?$', canal_input)
-            if match_chan:
-                canal_input = match_chan.group(1)
 
         # Si el input parece un número (incluso negativo), convertirlo a entero
         if str(canal_input).lstrip("-").isdigit():

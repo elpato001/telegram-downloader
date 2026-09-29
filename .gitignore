@@ -10,6 +10,8 @@ downloads/
 
 # Base de datos local y directorio de datos
 *.db
+*.db-shm
+*.db-wal
 data/*
 !data/.gitkeep
 
@@ -28,11 +30,20 @@ ENV/
 .env
 .env.local
 
-# IDEs
+# IDEs y Agentes
 .vscode/
 .idea/
 *.sublime-project
 *.sublime-workspace
+.agents/
+
+# Android build outputs & local config
+**/build/
+**/.gradle/
+**/local.properties
+**/*.iml
+**/.cxx/
+**/captures/
 
 # Sistema operativo
 Thumbs.db
@@ -41,3 +52,4 @@ Desktop.ini
 
 # Carpeta duplicada local
 telegram downloader/
+

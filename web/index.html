@@ -6,7 +6,7 @@
     <title>Telegram Downloader</title>
     <link rel="icon" type="image/png" href="logo.png">
     <link href="https://fonts.googleapis.com/css2?family=Segoe+UI:wght@400;500;600&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="styles.css?v=1.3">
+    <link rel="stylesheet" href="styles.css?v=2.0">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body>
@@ -36,7 +36,11 @@
                 </button>
             </div>
 
-            <div class="header-right-tools">
+            <div class="header-right-tools" style="display: flex; align-items: center; gap: 8px;">
+                <button type="button" class="toolbar-btn" id="btnOpenSettings" title="Configurar descargas en paralelo y tiempo máximo de espera" style="padding: 4px 10px; font-size: 11px; display: inline-flex; align-items: center; gap: 5px; height: 26px;">
+                    <i class="fa-solid fa-gear" style="color: #4b5563;"></i>
+                    <span style="font-weight: 500;">Configuración</span>
+                </button>
                 <div id="userInfoGroup" style="display: none; align-items: center; font-size: 11px; gap: 8px;">
                     <i class="fa-solid fa-user" style="color: #0078d7;"></i>
                     <span id="userInfoName">Usuario</span>
@@ -619,6 +623,21 @@
                     <div id="networkSharesContainer" style="display: flex; flex-wrap: wrap; gap: 6px;"></div>
                 </div>
 
+                <!-- Discos USB y Externos Detectados -->
+                <div id="usbDrivesSection" style="display: none;">
+                    <div style="font-size: 11px; font-weight: 600; color: #16a34a; text-transform: uppercase; margin-bottom: 6px; display: flex; align-items: center; gap: 5px;">
+                        <i class="fa-brands fa-usb" style="font-size: 13px;"></i>
+                        <span>Discos USB y Externos Detectados:</span>
+                    </div>
+                    <div id="usbDrivesContainer" style="display: flex; flex-wrap: wrap; gap: 6px;"></div>
+                </div>
+
+                <!-- Aviso informativo para Docker en Synology -->
+                <div id="dockerUsbBanner" style="display: none; background: #eff6ff; border: 1px solid #bfdbfe; border-left: 4px solid #3b82f6; padding: 8px 12px; border-radius: 4px; font-size: 11px; color: #1e40af; line-height: 1.4;">
+                    <i class="fa-brands fa-docker" style="font-size: 13px; color: #2563eb; margin-right: 4px;"></i>
+                    <span id="dockerUsbBannerText"></span>
+                </div>
+
                 <!-- Navegador de carpetas -->
                 <div style="flex: 1; display: flex; flex-direction: column; border: 1px solid var(--border-color); border-radius: 4px; overflow: hidden; background: #fff;">
                     <div style="background: #f3f4f6; padding: 6px 10px; border-bottom: 1px solid var(--border-color); display: flex; align-items: center; gap: 6px; font-size: 12px;">
@@ -688,6 +707,191 @@
             <div class="modal-footer" style="background: white; border-top: none; padding-top: 0; display: flex; justify-content: flex-end; gap: 10px;">
                 <button type="button" class="btn" id="btnConfirmNo" style="min-width: 80px; border-radius: 20px; background: #e5e5e5; border: none;">Cancelar</button>
                 <button type="button" class="btn primary-btn" id="btnConfirmYes" style="min-width: 80px; border-radius: 20px;">Aceptar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal de Confirmación de Reemplazo de Archivos (Historial) -->
+    <div class="modal-overlay" id="replaceModal" style="display: none; z-index: 10001;">
+        <div class="modal" style="width: 480px; max-width: 95vw; border-radius: 8px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.25);">
+            <div class="modal-header" style="display: flex; align-items: center; justify-content: space-between; background: #24a1de; color: white; padding: 10px 16px;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <i class="fa-solid fa-clock-rotate-left" style="font-size: 15px;"></i>
+                    <span id="replaceModalTitle" style="font-weight: 600; font-size: 14px;">Archivos ya descargados</span>
+                </div>
+                <button type="button" id="btnReplaceClose" style="background: none; border: none; color: white; font-size: 18px; cursor: pointer; padding: 0 4px; line-height: 1;">&times;</button>
+            </div>
+            <div class="modal-body" style="padding: 16px 20px; background: #ffffff;">
+                <p id="replaceModalMessage" style="font-size: 13px; color: #333; line-height: 1.5; margin: 0 0 12px;"></p>
+                <div id="replaceModalListContainer" style="display: none; max-height: 160px; overflow-y: auto; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px 12px; margin-bottom: 12px;">
+                    <ul id="replaceModalFileList" style="margin: 0; padding-left: 18px; font-size: 12px; color: #475569; word-break: break-all;"></ul>
+                </div>
+                <p style="font-size: 12px; color: #64748b; margin: 0;">
+                    ¿Qué acción deseas realizar con estos archivos?
+                </p>
+            </div>
+            <div class="modal-footer" style="background: #f8fafc; border-top: 1px solid #e2e8f0; padding: 12px 16px; display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap;">
+                <button type="button" class="btn" id="btnReplaceCancel" style="border-radius: 4px; padding: 6px 14px; font-size: 12px; cursor: pointer;">Cancelar</button>
+                <button type="button" class="btn" id="btnReplaceSkip" style="background: #0284c7; color: white; border: 1px solid #0284c7; border-radius: 4px; padding: 6px 14px; font-size: 12px; font-weight: 500; cursor: pointer;" title="Descargar únicamente los archivos que aún no se hayan descargado">
+                    <i class="fa-solid fa-forward-step"></i> Omitir ya descargados
+                </button>
+                <button type="button" class="btn primary-btn" id="btnReplaceOverwrite" style="background: #ea580c; color: white; border: 1px solid #c2410c; border-radius: 4px; padding: 6px 14px; font-size: 12px; font-weight: 500; cursor: pointer;" title="Volver a descargar y reemplazar los archivos existentes">
+                    <i class="fa-solid fa-rotate"></i> Reemplazar
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal de Configuración Global -->
+    <div class="modal-overlay" id="settingsModal" style="display: none; z-index: 10005;">
+        <div class="modal" style="width: 520px; max-width: 95vw; border-radius: 8px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.25);">
+            <div class="modal-header" style="display: flex; align-items: center; justify-content: space-between; background: #24a1de; color: white; padding: 10px 16px;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <i class="fa-solid fa-sliders" style="font-size: 15px;"></i>
+                    <span style="font-weight: 600; font-size: 14px;">Configuración de Descargas</span>
+                </div>
+                <button type="button" class="btn-close-modal" id="btnCloseSettingsModal" style="background: none; border: none; color: white; font-size: 18px; cursor: pointer;">&times;</button>
+            </div>
+            <div class="modal-body" style="padding: 18px 20px; background: #ffffff; display: flex; flex-direction: column; gap: 16px; max-height: 75vh; overflow-y: auto;">
+                
+                <!-- Apartado: Conexión con App Android -->
+                <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 14px 16px;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+                        <label style="display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 13px; color: #166534; margin: 0;">
+                            <i class="fa-brands fa-android" style="font-size: 18px; color: #22c55e;"></i>
+                            <span>Conexión con App Android</span>
+                        </label>
+                        <span style="font-size: 11px; background: #dcfce7; color: #15803d; padding: 2px 8px; border-radius: 10px; font-weight: 700; border: 1px solid #86efac;">
+                            Puerto: <span id="lblServerPort">8000</span>
+                        </span>
+                    </div>
+
+                    <div style="display: flex; gap: 14px; align-items: center; flex-wrap: wrap;">
+                        <!-- Columna izquierda: Datos y botón copiar -->
+                        <div style="flex: 1; min-width: 220px;">
+                            <p style="font-size: 12px; color: #334155; margin: 0 0 8px 0; line-height: 1.4;">
+                                Escanea el código QR desde la App Android o copia la dirección IP del servidor:
+                            </p>
+                            
+                            <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 8px;">
+                                <input type="text" id="txtServerIpUrl" readonly value="http://127.0.0.1:8000" 
+                                    style="flex: 1; padding: 7px 10px; font-size: 12px; font-family: monospace; font-weight: 700; color: #0f172a; background: #ffffff; border: 1px solid #86efac; border-radius: 4px; box-sizing: border-box; outline: none;">
+                                <button type="button" class="btn" id="btnCopyServerIp" style="padding: 7px 12px; font-size: 12px; font-weight: 600; background: #22c55e; color: white; border: none; border-radius: 4px; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; white-space: nowrap;">
+                                    <i class="fa-solid fa-copy"></i> <span id="lblCopyText">Copiar</span>
+                                </button>
+                            </div>
+
+                            <div id="extraIpsContainer" style="display: none; margin-bottom: 8px; font-size: 11px; color: #64748b;">
+                                Otras IPs: <span id="lblExtraIps" style="font-family: monospace; color: #15803d; font-weight: 600;"></span>
+                            </div>
+
+                            <p style="font-size: 11px; color: #15803d; margin: 0; display: flex; align-items: center; gap: 5px;">
+                                <i class="fa-solid fa-wifi"></i>
+                                <span>Móvil y servidor deben estar en la misma red WiFi o VPN.</span>
+                            </p>
+                        </div>
+
+                        <!-- Columna derecha: Código QR visible directamente -->
+                        <div style="background: white; border: 1px solid #86efac; border-radius: 6px; padding: 8px 10px; text-align: center; box-shadow: 0 2px 5px rgba(0,0,0,0.04);">
+                            <div id="qrCodeAndroid" style="display: flex; justify-content: center; align-items: center; min-width: 110px; min-height: 110px;"></div>
+                            <span style="display: block; font-size: 10px; font-weight: 700; color: #166534; margin-top: 4px;">
+                                <i class="fa-solid fa-qrcode"></i> Escanear con la App
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
+                <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 0;">
+
+                <div>
+                    <label style="display: block; font-weight: 600; font-size: 13px; color: #1e293b; margin-bottom: 6px;">
+                        <i class="fa-solid fa-layer-group" style="color: #24a1de; margin-right: 6px;"></i>Descargas Simultáneas (en paralelo)
+                    </label>
+                    <div style="display: flex; align-items: center; gap: 12px;">
+                        <input type="range" id="settingMaxConcurrent" min="1" max="5" value="2" style="flex: 1; cursor: pointer;">
+                        <span id="lblMaxConcurrentVal" style="font-weight: 700; font-size: 14px; color: #24a1de; width: 30px; text-align: center;">2</span>
+                    </div>
+                    <p style="font-size: 11px; color: #64748b; margin: 4px 0 0 0;">
+                        Cantidad de archivos que se descargarán al mismo tiempo (de 1 a 5 descargas en paralelo).
+                    </p>
+                </div>
+
+                <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 0;">
+
+                <div>
+                    <label style="display: block; font-weight: 600; font-size: 13px; color: #1e293b; margin-bottom: 6px;">
+                        <i class="fa-solid fa-clock-rotate-left" style="color: #d97706; margin-right: 6px;"></i>Tiempo máximo de inactividad (Timeout)
+                    </label>
+                    <select id="settingDownloadTimeout" class="modal-input" style="width: 100%; padding: 7px 10px; font-size: 13px; border-radius: 4px; border: 1px solid #cbd5e1;">
+                        <option value="30">30 segundos</option>
+                        <option value="60">60 segundos (Recomendado)</option>
+                        <option value="120">2 minutos</option>
+                        <option value="300">5 minutos</option>
+                        <option value="600">10 minutos</option>
+                    </select>
+                    <p style="font-size: 11px; color: #64748b; margin: 4px 0 0 0;">
+                        Si una descarga se congela o no transfiere datos durante este tiempo, se cancelará con error para continuar con el siguiente archivo.
+                    </p>
+                </div>
+
+                <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 0;">
+
+                <div>
+                    <label style="display: block; font-weight: 600; font-size: 13px; color: #1e293b; margin-bottom: 6px;">
+                        <i class="fa-solid fa-gauge-high" style="color: #10b981; margin-right: 6px;"></i>Límite de Ancho de Banda (Velocidad Global)
+                    </label>
+                    <select id="settingMaxBandwidth" class="modal-input" style="width: 100%; padding: 7px 10px; font-size: 13px; border-radius: 4px; border: 1px solid #cbd5e1;">
+                        <option value="0">Sin Límite (Máxima Velocidad)</option>
+                        <option value="1">1 MB/s</option>
+                        <option value="2">2 MB/s</option>
+                        <option value="5">5 MB/s (Recomendado para NAS)</option>
+                        <option value="10">10 MB/s</option>
+                        <option value="20">20 MB/s</option>
+                        <option value="50">50 MB/s</option>
+                    </select>
+                    <p style="font-size: 11px; color: #64748b; margin: 4px 0 0 0;">
+                        Limita el consumo de red de las descargas para no saturar tu router ni afectar streaming (Plex/Netflix).
+                    </p>
+                </div>
+
+                <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 0;">
+
+                <div>
+                    <label style="display: block; font-weight: 600; font-size: 13px; color: #1e293b; margin-bottom: 6px;">
+                        <i class="fa-solid fa-rotate-right" style="color: #6366f1; margin-right: 6px;"></i>Reintentos Automáticos por Archivo
+                    </label>
+                    <select id="settingMaxAutoRetries" class="modal-input" style="width: 100%; padding: 7px 10px; font-size: 13px; border-radius: 4px; border: 1px solid #cbd5e1;">
+                        <option value="0">Sin reintentos (Falla al primer error)</option>
+                        <option value="1">1 Reintento</option>
+                        <option value="2">2 Reintentos (Recomendado)</option>
+                        <option value="3">3 Reintentos</option>
+                        <option value="5">5 Reintentos</option>
+                    </select>
+                    <p style="font-size: 11px; color: #64748b; margin: 4px 0 0 0;">
+                        Si un archivo sufre un corte o timeout, la app reintentará descargarlo automáticamente antes de marcarlo con error.
+                    </p>
+                </div>
+
+                <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 0;">
+
+                <div>
+                    <label style="display: block; font-weight: 600; font-size: 13px; color: #1e293b; margin-bottom: 6px;">
+                        <i class="fa-solid fa-bell" style="color: #ec4899; margin-right: 6px;"></i>Notificaciones Push / Webhook URL
+                    </label>
+                    <div style="display: flex; gap: 8px;">
+                        <input type="url" id="settingWebhookUrl" placeholder="Ej: https://discord.com/api/webhooks/..." class="modal-input" style="flex: 1; padding: 7px 10px; font-size: 12px; border-radius: 4px; border: 1px solid #cbd5e1;">
+                        <button type="button" class="btn" id="btnTestWebhook" style="padding: 6px 12px; font-size: 11px; white-space: nowrap; font-weight: 600;" title="Enviar notificación de prueba">
+                            <i class="fa-solid fa-paper-plane"></i> Probar
+                        </button>
+                    </div>
+                    <p style="font-size: 11px; color: #64748b; margin: 4px 0 0 0;">
+                        Recibe avisos en tu móvil o Discord cuando finalicen las descargas o si ocurre un error. Compatible con Discord, Gotify y Webhooks HTTP.
+                    </p>
+                </div>
+            </div>
+            <div class="modal-footer" style="background: #f8fafc; border-top: 1px solid #e2e8f0; padding: 12px 16px; display: flex; justify-content: flex-end; gap: 10px;">
+                <button type="button" class="btn" id="btnCancelSettings" style="padding: 6px 14px; font-size: 12px;">Cancelar</button>
+                <button type="button" class="btn btn-primary" id="btnSaveSettings" style="padding: 6px 16px; font-size: 12px; background: #24a1de; border-color: #24a1de; color: white;">Guardar Cambios</button>
             </div>
         </div>
     </div>

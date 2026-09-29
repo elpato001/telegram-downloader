@@ -17,10 +17,17 @@ _local = threading.local()
 
 
 def _get_conn():
-    """Obtiene una conexión SQLite por hilo (thread-local)."""
+    """Obtiene una conexión SQLite por hilo (thread-local) con modo WAL optimizado para alto rendimiento."""
     if not hasattr(_local, "conn") or _local.conn is None:
-        _local.conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        _local.conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=60.0)
         _local.conn.row_factory = sqlite3.Row
+        try:
+            _local.conn.execute("PRAGMA journal_mode = WAL")
+            _local.conn.execute("PRAGMA synchronous = NORMAL")
+            _local.conn.execute("PRAGMA cache_size = -64000")
+            _local.conn.execute("PRAGMA temp_store = MEMORY")
+        except Exception:
+            pass
     return _local.conn
 
 
@@ -48,6 +55,13 @@ def init_db():
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    
+    # Índices de alto rendimiento para soportar decenas de miles de archivos sin bloquear SQLite
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_downloads_entity_msg ON downloads(entity_id, message_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_downloads_msg ON downloads(message_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_downloads_state ON downloads(state)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_downloads_package ON downloads(package_name)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_downloads_created ON downloads(created_at)")
     
     # Migraciones en caso de bases existentes
     try:
@@ -195,6 +209,10 @@ def init_db():
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    try:
+        conn.execute("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('webhook_url', 'https://chat.clubkarlabeauty.cl/index.php')")
+    except Exception:
+        pass
 
     # Resetear cualquier descarga que haya quedado en 'downloading' tras cerrar la app a 'paused'
     try:
@@ -214,9 +232,33 @@ def fix_interrupted_downloads():
 
 # ─── Métodos para Descargas (Pestaña "Descargas") ──────────────────────
 
-def add_download(message_id, entity_id="", filename="", total_size=0, custom_dir="", file_path="", package_name="Descargas", fecha="", channel_name=""):
-    """Agrega una nueva descarga al historial y retorna su ID."""
+def add_download(message_id, entity_id="", filename="", total_size=0, custom_dir="", file_path="", package_name="Descargas", fecha="", channel_name="", overwrite=False):
+    """Agrega una nueva descarga al historial o actualiza la existente si overwrite es True."""
     conn = _get_conn()
+    clean_id = str(entity_id).replace("-100", "").replace("-", "")
+    existing = None
+    if message_id and clean_id:
+        existing = conn.execute(
+            "SELECT id, state FROM downloads WHERE message_id = ? AND replace(replace(entity_id, '-100', ''), '-', '') = ?",
+            (message_id, clean_id)
+        ).fetchone()
+    elif message_id and filename:
+        existing = conn.execute(
+            "SELECT id, state FROM downloads WHERE message_id = ? AND filename = ?",
+            (message_id, filename)
+        ).fetchone()
+
+    if existing:
+        if overwrite:
+            conn.execute(
+                """UPDATE downloads SET filename = ?, total_size = ?, custom_dir = ?, package_name = ?, channel_name = ?, fecha = ?, state = 'pending', downloaded_bytes = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?""",
+                (filename, total_size, custom_dir, package_name or "Descargas", channel_name or "", fecha, existing["id"])
+            )
+            conn.commit()
+            return existing["id"]
+        else:
+            return existing["id"]
+
     cursor = conn.execute(
         """INSERT INTO downloads (message_id, entity_id, filename, total_size, custom_dir, file_path, package_name, channel_name, fecha, state)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')""",
@@ -224,6 +266,133 @@ def add_download(message_id, entity_id="", filename="", total_size=0, custom_dir
     )
     conn.commit()
     return cursor.lastrowid
+
+
+def add_downloads_batch(items, overwrite=False):
+    """
+    Agrega un lote de descargas en una sola transacción atómica SQLite.
+    Si overwrite es True y el archivo ya existía en la base de datos, reinicia su estado a 'pending'.
+    """
+    if not items:
+        return []
+    conn = _get_conn()
+    cursor = conn.cursor()
+    sql_insert = """INSERT INTO downloads (message_id, entity_id, filename, total_size, custom_dir, file_path, package_name, channel_name, fecha, state)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')"""
+    sql_update = """UPDATE downloads SET filename = ?, total_size = ?, custom_dir = ?, package_name = ?, channel_name = ?, fecha = ?, state = 'pending', downloaded_bytes = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?"""
+
+    inserted_ids = []
+    for it in items:
+        msg_id = it.get("message_id", 0)
+        ent_id = str(it.get("entity_id", ""))
+        clean_id = ent_id.replace("-100", "").replace("-", "")
+        fn = it.get("filename", "")
+        sz = it.get("total_size", 0)
+        cdir = it.get("custom_dir", "")
+        pkg = it.get("package_name") or "Descargas"
+        chan = it.get("channel_name", "")
+        fec = it.get("fecha", "")
+
+        if msg_id and clean_id:
+            row = cursor.execute(
+                "SELECT id, state FROM downloads WHERE message_id = ? AND replace(replace(entity_id, '-100', ''), '-', '') = ?",
+                (msg_id, clean_id)
+            ).fetchone()
+            if row:
+                if overwrite:
+                    cursor.execute(sql_update, (fn, sz, cdir, pkg, chan, fec, row[0]))
+                    inserted_ids.append(row[0])
+                else:
+                    if row["state"] != "done":
+                        inserted_ids.append(row[0])
+                continue
+
+        cursor.execute(sql_insert, (msg_id, ent_id, fn, sz, cdir, it.get("file_path", ""), pkg, chan, fec))
+        inserted_ids.append(cursor.lastrowid)
+
+    conn.commit()
+    return inserted_ids
+
+
+def get_existing_message_ids_for_entity(entity_id=""):
+    """
+    Retorna un set con todos los message_id ya registrados para una entidad en una sola consulta indexada.
+    Permite validar miles de mensajes en memoria en O(1) de forma instantánea.
+    """
+    conn = _get_conn()
+    clean_id = str(entity_id).replace("-100", "").replace("-", "")
+    if clean_id:
+        rows = conn.execute(
+            "SELECT message_id FROM downloads WHERE replace(replace(entity_id, '-100', ''), '-', '') = ?",
+            (clean_id,)
+        ).fetchall()
+    else:
+        rows = conn.execute("SELECT message_id FROM downloads").fetchall()
+    return {r["message_id"] for r in rows}
+
+
+def get_completed_message_ids_for_entity(entity_id=""):
+    """
+    Retorna un set con los message_id que ya figuran con estado 'done' en el historial para esta entidad.
+    Usado para comprobar si un archivo ya fue descargado previamente según el historial.
+    """
+    conn = _get_conn()
+    clean_id = str(entity_id).replace("-100", "").replace("-", "")
+    if clean_id:
+        rows = conn.execute(
+            "SELECT message_id FROM downloads WHERE replace(replace(entity_id, '-100', ''), '-', '') = ? AND state = 'done'",
+            (clean_id,)
+        ).fetchall()
+    else:
+        rows = conn.execute("SELECT message_id FROM downloads WHERE state = 'done'").fetchall()
+    return {r["message_id"] for r in rows}
+
+
+def check_items_in_history(items):
+    """
+    Comprueba de forma rápida en SQLite qué elementos de la lista ya figuran
+    como descargados ('done') en la base de datos de descargas.
+    Retorna la lista de items que ya están completados.
+    """
+    if not items:
+        return []
+    conn = _get_conn()
+    already_done = []
+    for it in items:
+        msg_id = it.get("message_id")
+        ent_id = str(it.get("entity_id", "")).replace("-100", "").replace("-", "")
+        fn = it.get("filename", "")
+        row = None
+        if msg_id and ent_id:
+            row = conn.execute(
+                "SELECT id, filename, total_size, file_path, state, custom_dir, package_name, channel_name FROM downloads WHERE message_id = ? AND replace(replace(entity_id, '-100', ''), '-', '') = ? AND state = 'done'",
+                (msg_id, ent_id)
+            ).fetchone()
+        elif msg_id:
+            row = conn.execute(
+                "SELECT id, filename, total_size, file_path, state, custom_dir, package_name, channel_name FROM downloads WHERE message_id = ? AND state = 'done'",
+                (msg_id,)
+            ).fetchone()
+        elif fn:
+            row = conn.execute(
+                "SELECT id, filename, total_size, file_path, state, custom_dir, package_name, channel_name FROM downloads WHERE filename = ? AND state = 'done'",
+                (fn,)
+            ).fetchone()
+
+        if row:
+            already_done.append({
+                "message_id": msg_id,
+                "entity_id": it.get("entity_id", ""),
+                "filename": fn or row["filename"],
+                "total_size": it.get("total_size") or row["total_size"],
+                "file_path": row["file_path"],
+                "custom_dir": row["custom_dir"],
+                "package_name": row["package_name"],
+                "channel_name": row["channel_name"],
+                "grabber_item_id": it.get("grabber_item_id"),
+                "db_id": row["id"]
+            })
+    return already_done
 
 
 def update_download_state(download_id, state):
@@ -301,6 +470,16 @@ def delete_package_downloads(package_name):
     """Elimina todas las descargas que pertenezcan a un paquete específico."""
     conn = _get_conn()
     conn.execute("DELETE FROM downloads WHERE package_name = ?", (package_name,))
+    conn.commit()
+
+
+def delete_channel_downloads(channel_name):
+    """Elimina todas las descargas que pertenezcan a un canal o a Descargas Directas."""
+    conn = _get_conn()
+    if channel_name == "Descargas Directas":
+        conn.execute("DELETE FROM downloads WHERE channel_name = ? OR channel_name IS NULL OR channel_name = ''", (channel_name,))
+    else:
+        conn.execute("DELETE FROM downloads WHERE channel_name = ?", (channel_name,))
     conn.commit()
 
 

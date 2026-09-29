@@ -187,6 +187,71 @@ function showConfirmDialog(message) {
 }
 
 
+function escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+
+function showReplacePrompt({ title, message, files = [], allowSkip = true }) {
+    return new Promise((resolve) => {
+        const modal = document.getElementById('replaceModal');
+        const titleEl = document.getElementById('replaceModalTitle');
+        const msgEl = document.getElementById('replaceModalMessage');
+        const listContainer = document.getElementById('replaceModalListContainer');
+        const fileList = document.getElementById('replaceModalFileList');
+        const btnCancel = document.getElementById('btnReplaceCancel');
+        const btnSkip = document.getElementById('btnReplaceSkip');
+        const btnOverwrite = document.getElementById('btnReplaceOverwrite');
+        const btnClose = document.getElementById('btnReplaceClose');
+
+        if (!modal) {
+            resolve('cancel');
+            return;
+        }
+
+        if (titleEl) titleEl.textContent = title || 'Archivos ya descargados';
+        if (msgEl) msgEl.innerHTML = message || '';
+
+        if (fileList && files && files.length > 0) {
+            fileList.innerHTML = files.slice(0, 80).map(f => {
+                const name = typeof f === 'string' ? f : (f.filename || 'Archivo');
+                const sz = (typeof f === 'object' && f.total_size) ? ` <span style="color: #94a3b8; font-size: 11px;">(${formatBytes(f.total_size)})</span>` : '';
+                return `<li style="margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"><i class="fa-solid fa-file-circle-check" style="color: #10b981; margin-right: 5px;"></i><strong>${escapeHtml(name)}</strong>${sz}</li>`;
+            }).join('') + (files.length > 80 ? `<li style="color: #94a3b8; font-style: italic; list-style: none; margin-top: 4px;">... y ${files.length - 80} archivo(s) más.</li>` : '');
+            if (listContainer) listContainer.style.display = 'block';
+        } else if (listContainer) {
+            listContainer.style.display = 'none';
+        }
+
+        if (btnSkip) {
+            btnSkip.style.display = allowSkip ? 'inline-flex' : 'none';
+        }
+
+        const cleanup = (choice) => {
+            modal.style.display = 'none';
+            if (btnCancel) btnCancel.onclick = null;
+            if (btnSkip) btnSkip.onclick = null;
+            if (btnOverwrite) btnOverwrite.onclick = null;
+            if (btnClose) btnClose.onclick = null;
+            resolve(choice);
+        };
+
+        if (btnCancel) btnCancel.onclick = () => cleanup('cancel');
+        if (btnClose) btnClose.onclick = () => cleanup('cancel');
+        if (btnSkip) btnSkip.onclick = () => cleanup('skip');
+        if (btnOverwrite) btnOverwrite.onclick = () => cleanup('overwrite');
+
+        modal.style.display = 'flex';
+    });
+}
+
+
 function showToast(message, type = 'error', duration = 9000, title = '') {
     const container = document.getElementById('toastContainer');
     if (!container) return;
@@ -321,6 +386,10 @@ let downloadsData = [];
 let grabberPackages = [];
 let expandedDescargas = new Set();
 let expandedGrabber = new Set();
+let expandedDescargasChannels = new Set();
+let expandedGrabberChannels = new Set();
+let descargasPkgLimits = {};
+let grabberPkgLimits = {};
 let selectedDownloads = new Set();
 let selectedGrabberItems = new Set();
 let selectedGrabberPackages = new Set();
@@ -328,6 +397,24 @@ let itemStates = {};
 let itemFilePaths = {};
 let itemSpeeds = {};
 let itemProgress = {};
+
+// Generadores de guías jerárquicas del árbol en cascada (alineadas exactamente debajo de la carpeta)
+function getPackageBranchGuideHtml(isLastPkg) {
+    return `<div class="tree-pkg-guide-wrap" style="position:relative;width:46px;height:28px;display:inline-flex;align-items:center;vertical-align:middle;flex-shrink:0;">
+        <span style="position:absolute;left:30px;top:0;height:50%;width:1px;background:#94a3b8;"></span>
+        ${!isLastPkg ? '<span style="position:absolute;left:30px;top:50%;bottom:0;width:1px;background:#94a3b8;"></span>' : ''}
+        <span style="position:absolute;left:30px;top:50%;width:16px;height:1px;background:#94a3b8;transform:translateY(-50%);"></span>
+    </div>`;
+}
+
+function getFileBranchGuideHtml(isLastPkg, isLastItem) {
+    return `<div class="tree-file-guide-wrap" style="position:relative;width:110px;height:28px;display:inline-flex;align-items:center;vertical-align:middle;flex-shrink:0;">
+        ${!isLastPkg ? '<span style="position:absolute;left:30px;top:0;bottom:0;width:1px;background:#94a3b8;"></span>' : ''}
+        <span style="position:absolute;left:95px;top:0;height:50%;width:1px;background:#94a3b8;"></span>
+        ${!isLastItem ? '<span style="position:absolute;left:95px;top:50%;bottom:0;width:1px;background:#94a3b8;"></span>' : ''}
+        <span style="position:absolute;left:95px;top:50%;width:15px;height:1px;background:#94a3b8;transform:translateY(-50%);"></span>
+    </div>`;
+}
 
 // DOM Elements comunes
 const loginModal = document.getElementById('loginModal');
@@ -1353,12 +1440,6 @@ async function loadGrabberData() {
         const data = await res.json();
         if (data.success) {
             grabberPackages = data.packages || [];
-            // Por defecto, expandir todos los paquetes nuevos en el capturador
-            grabberPackages.forEach(p => {
-                if (!expandedGrabber.has(p.id)) {
-                    expandedGrabber.add(p.id);
-                }
-            });
             updateGrabberBadges();
             renderGrabberTable();
         }
@@ -1396,11 +1477,6 @@ async function loadDownloadsData() {
             downloadsData.forEach(item => {
                 itemStates[item.db_id] = item.state;
                 if (item.file_path) itemFilePaths[item.db_id] = item.file_path;
-                // Por defecto, expandir los paquetes que tengan descargas
-                const pkg = item.package_name || 'Descargas';
-                if (!expandedDescargas.has(pkg)) {
-                    expandedDescargas.add(pkg);
-                }
             });
             updateDescargasBadges();
             renderDescargasTable();
@@ -1411,7 +1487,16 @@ async function loadDownloadsData() {
     }
 }
 
+let _descargasBadgesTimer = null;
 function updateDescargasBadges() {
+    if (_descargasBadgesTimer) return;
+    _descargasBadgesTimer = setTimeout(() => {
+        _descargasBadgesTimer = null;
+        _doUpdateDescargasBadges();
+    }, 300);
+}
+
+function _doUpdateDescargasBadges() {
     let activeCount = 0;
     let doneCount = 0;
     downloadsData.forEach(d => {
@@ -1486,10 +1571,8 @@ btnScanSubmit.addEventListener('click', async () => {
         
         if (data.success) {
             grabberPackages = data.packages || [];
-            if (data.package_id) {
-                expandedGrabber.add(data.package_id);
-            }
             updateGrabberBadges();
+            renderGrabberTable();
             
             // Cambiar automáticamente a la pestaña del capturador para ver el paquete añadido
             switchMainTab('grabber');
@@ -1560,11 +1643,12 @@ function renderGrabberTable() {
     
     const searchTerm = searchGrabberInput ? searchGrabberInput.value.toLowerCase().trim() : '';
     
-    // Filtrar paquetes y sus items
-    const matchingPackages = [];
+    // Agrupar paquetes por Canal de Telegram
+    const channelMap = new Map();
     grabberPackages.forEach(pkg => {
         const pkgNameLower = (pkg.name || '').toLowerCase();
-        const pkgChanLower = (pkg.channel_name || '').toLowerCase();
+        const pkgChan = (pkg.channel_name || '').trim() || 'Canal Telegram';
+        const pkgChanLower = pkgChan.toLowerCase();
         const pkgMatches = !searchTerm || pkgNameLower.includes(searchTerm) || pkgChanLower.includes(searchTerm);
 
         const filteredItems = (pkg.items || []).filter(item => {
@@ -1574,180 +1658,283 @@ function renderGrabberTable() {
         });
 
         if (searchTerm && !pkgMatches && filteredItems.length === 0) return;
-        matchingPackages.push({ pkg, filteredItems });
+
+        if (!channelMap.has(pkgChan)) {
+            channelMap.set(pkgChan, { channelName: pkgChan, packages: [] });
+        }
+        channelMap.get(pkgChan).packages.push({ pkg, filteredItems });
     });
 
-    if (matchingPackages.length === 0) {
+    if (channelMap.size === 0) {
         bodyGrabber.innerHTML = `<tr><td colspan="6" style="text-align: center; color: #6b7280; padding: 25px;">No se encontraron paquetes que coincidan con la búsqueda.</td></tr>`;
         updateGrabberSelection();
         return;
     }
 
-    const packagesToRender = matchingPackages.slice(0, grabberDisplayLimit);
-    
-    packagesToRender.forEach(({ pkg, filteredItems }) => {
-        
-        const isExpanded = expandedGrabber.has(pkg.id);
-        const pkgSize = filteredItems.reduce((acc, it) => acc + (it.total_size || 0), 0);
-        const allItemsChecked = filteredItems.length > 0 && filteredItems.every(it => selectedGrabberItems.has(it.id));
-        const someItemsChecked = filteredItems.some(it => selectedGrabberItems.has(it.id));
-        
-        // 1. Fila del Paquete / Carpeta
-        const trPkg = document.createElement('tr');
-        trPkg.className = 'package-row';
-        trPkg.dataset.pkgId = pkg.id;
-        
-        trPkg.innerHTML = `
+    // Si hay búsqueda activa, expandir automáticamente canales y paquetes que coincidan
+    if (searchTerm) {
+        channelMap.forEach(({ channelName, packages }) => {
+            expandedGrabberChannels.add(channelName);
+            packages.forEach(({ pkg }) => expandedGrabber.add(pkg.id));
+        });
+    }
+
+    channelMap.forEach(({ channelName, packages }) => {
+        // Calcular estadísticas agregadas del canal
+        const allChanItems = [];
+        packages.forEach(({ filteredItems }) => {
+            filteredItems.forEach(it => allChanItems.push(it));
+        });
+        const chanTotalSize = allChanItems.reduce((acc, it) => acc + (it.total_size || 0), 0);
+        const allChanChecked = allChanItems.length > 0 && allChanItems.every(it => selectedGrabberItems.has(it.id));
+        const someChanChecked = allChanItems.some(it => selectedGrabberItems.has(it.id));
+        const isChanExpanded = expandedGrabberChannels.has(channelName);
+        const latestDate = allChanItems.find(it => it.fecha)?.fecha || '';
+        const channelDest = packages[0]?.pkg.custom_dir || '';
+
+        // 1. FILA DE CANAL (NIVEL 1 - RAÍZ)
+        const trChan = document.createElement('tr');
+        trChan.className = 'channel-row';
+        trChan.dataset.channelName = channelName;
+
+        trChan.innerHTML = `
             <td style="text-align: center;">
-                <input type="checkbox" class="pkg-check-grabber" data-pkg-id="${pkg.id}" ${allItemsChecked ? 'checked' : ''}>
+                <input type="checkbox" class="chan-check-grabber" data-channel-name="${channelName}" ${allChanChecked ? 'checked' : ''}>
             </td>
             <td>
-                <button type="button" class="tree-toggle-btn" data-pkg-id="${pkg.id}" title="${isExpanded ? 'Contraer carpeta' : 'Expandir carpeta'}">
-                    ${isExpanded ? '−' : '+'}
+                <button type="button" class="tree-toggle-btn" data-channel-name="${channelName}" title="${isChanExpanded ? 'Contraer canal' : 'Expandir canal'}">
+                    ${isChanExpanded ? '−' : '+'}
                 </button>
-                <i class="fa-solid ${isExpanded ? 'fa-folder-open' : 'fa-folder'} folder-icon"></i>
-                <span style="font-weight: 600; color: #1e3a5f;" title="Carpeta contenedora: ${pkg.name}">${pkg.name}</span>
-                <span class="package-badge-count">(${filteredItems.length} archivos)</span>
-                ${pkg.channel_name ? `<span class="channel-badge" style="background: #e0f2fe; color: #0369a1; padding: 2px 7px; border-radius: 4px; font-size: 11px; margin-left: 6px; font-weight: 500;" title="Canal de Telegram: ${pkg.channel_name}"><i class="fa-brands fa-telegram"></i> ${pkg.channel_name}</span>` : ''}
-                <button type="button" class="row-action-btn" onclick="handleRenameGrabberPackage(event, ${pkg.id}, '${(pkg.name || '').replace(/'/g, "\\'")}')" title="Renombrar carpeta contenedora" style="padding: 2px 5px; font-size: 10px; margin-left: 4px; opacity: 0.7;">
-                    <i class="fa-solid fa-pen"></i>
-                </button>
+                <i class="fa-solid ${isChanExpanded ? 'fa-folder-open' : 'fa-folder'} folder-icon"></i>
+                <span class="channel-badge-pill" title="Canal de Telegram: ${channelName}">
+                    <i class="fa-brands fa-telegram"></i> ${channelName}
+                </span>
+                <span class="package-badge-count">(${packages.length} paquetes, ${allChanItems.length} archivos)</span>
             </td>
-            <td><strong>${formatBytes(pkgSize)}</strong></td>
-            <td style="font-size: 11px; color: #555;">${filteredItems.length > 0 && filteredItems[0].fecha ? formatFecha(filteredItems[0].fecha) : '-'}</td>
-            <td style="font-size: 11px; color: #555; overflow: hidden; text-overflow: ellipsis;" title="${(pkg.custom_dir || 'Ruta por defecto') + (pkg.channel_name ? ' \\ ' + pkg.channel_name : '') + ' \\ ' + pkg.name}">
+            <td><strong>${formatBytes(chanTotalSize)}</strong></td>
+            <td style="font-size: 11px; color: #555;">${latestDate ? formatFecha(latestDate) : '-'}</td>
+            <td style="font-size: 11px; color: #555; overflow: hidden; text-overflow: ellipsis;" title="${channelDest || 'Ruta por defecto'}">
                 <i class="fa-regular fa-folder" style="color: #888; margin-right: 4px;"></i>
-                ${pkg.channel_name ? `<span style="color:#0369a1;">${pkg.channel_name}</span> \\ ` : ''}<strong>${pkg.name}</strong>
+                <span style="color:#0369a1; font-weight: 500;">${channelDest || 'Ruta por defecto'}</span>
             </td>
             <td style="text-align: center;">
                 <div style="display: inline-flex; gap: 4px; align-items: center; justify-content: center;">
-                    <button type="button" class="row-action-btn start-download-btn" onclick="handleDownloadGrabberPackage(event, ${pkg.id})" title="Descargar todo este paquete" style="padding: 3px 8px; font-size: 11px;">
+                    <button type="button" class="row-action-btn start-download-btn" onclick="handleDownloadGrabberChannel(event, '${channelName.replace(/'/g, "\\'")}')" title="Descargar todo este canal" style="padding: 3px 8px; font-size: 11px;">
                         <i class="fa-solid fa-download"></i> Descargar
                     </button>
-                    <button type="button" class="row-action-btn btn-danger" onclick="handleDeleteGrabberPackage(event, ${pkg.id})" title="Eliminar paquete del capturador">
+                    <button type="button" class="row-action-btn btn-danger" onclick="handleDeleteGrabberChannel(event, '${channelName.replace(/'/g, "\\'")}')" title="Eliminar este canal y sus paquetes">
                         <i class="fa-solid fa-trash-can"></i>
                     </button>
                 </div>
             </td>
         `;
-        
-        // Manejar checkbox del paquete
-        const pkgCb = trPkg.querySelector('.pkg-check-grabber');
-        if (someItemsChecked && !allItemsChecked) {
-            pkgCb.indeterminate = true;
+
+        const chanCb = trChan.querySelector('.chan-check-grabber');
+        if (someChanChecked && !allChanChecked) {
+            chanCb.indeterminate = true;
         }
-        pkgCb.addEventListener('click', (e) => {
+        chanCb.addEventListener('click', (e) => {
             e.stopPropagation();
-            const checked = pkgCb.checked;
-            filteredItems.forEach(it => {
+            const checked = chanCb.checked;
+            allChanItems.forEach(it => {
                 if (checked) selectedGrabberItems.add(it.id);
                 else selectedGrabberItems.delete(it.id);
             });
             renderGrabberTable();
         });
-        
-        // Manejar clic en botón expandir o en la fila de paquete
-        const toggleBtn = trPkg.querySelector('.tree-toggle-btn');
-        const handleToggle = (e) => {
+
+        const toggleChanBtn = trChan.querySelector('.tree-toggle-btn');
+        const handleChanToggle = (e) => {
             e.stopPropagation();
-            if (expandedGrabber.has(pkg.id)) {
-                expandedGrabber.delete(pkg.id);
+            if (expandedGrabberChannels.has(channelName)) {
+                expandedGrabberChannels.delete(channelName);
             } else {
-                expandedGrabber.add(pkg.id);
+                expandedGrabberChannels.add(channelName);
             }
             renderGrabberTable();
         };
-        toggleBtn.addEventListener('click', handleToggle);
-        trPkg.addEventListener('click', (e) => {
+        toggleChanBtn.addEventListener('click', handleChanToggle);
+        trChan.addEventListener('click', (e) => {
             if (e.target.closest('.row-action-btn') || e.target.type === 'checkbox') return;
-            handleToggle(e);
+            handleChanToggle(e);
         });
-        
-        bodyGrabber.appendChild(trPkg);
-        
-        // 2. Filas de Archivos Hijas (si la carpeta está expandida)
-        if (isExpanded) {
-            filteredItems.forEach(item => {
-                const isSelected = selectedGrabberItems.has(item.id);
-                const trItem = document.createElement('tr');
-                trItem.className = `child-file-row ${isSelected ? 'selected' : ''}`;
-                trItem.dataset.itemId = item.id;
-                
-                trItem.innerHTML = `
-                    <td></td>
+
+        bodyGrabber.appendChild(trChan);
+
+        // 2. FILAS DE PAQUETES (NIVEL 2 - EN CASCADA BAJO EL CANAL)
+        if (isChanExpanded) {
+            packages.forEach(({ pkg, filteredItems }, pkgIdx) => {
+                const isLastPkg = (pkgIdx === packages.length - 1);
+                const isPkgExpanded = expandedGrabber.has(pkg.id);
+                const pkgSize = filteredItems.reduce((acc, it) => acc + (it.total_size || 0), 0);
+                const allPkgChecked = filteredItems.length > 0 && filteredItems.every(it => selectedGrabberItems.has(it.id));
+                const somePkgChecked = filteredItems.some(it => selectedGrabberItems.has(it.id));
+
+                const trPkg = document.createElement('tr');
+                trPkg.className = 'package-row';
+                trPkg.dataset.pkgId = pkg.id;
+
+                trPkg.innerHTML = `
+                    <td style="text-align: center;"></td>
                     <td>
-                        <span class="child-indent"></span>
-                        <input type="checkbox" class="item-check-grabber tree-item-checkbox" data-item-id="${item.id}" ${isSelected ? 'checked' : ''}>
-                        <i class="${getFileIconClass(item.filename)} file-type-icon"></i>
-                        <span title="${item.filename}">${item.filename}</span>
+                        ${getPackageBranchGuideHtml(isLastPkg)}
+                        <input type="checkbox" class="pkg-check-grabber tree-item-checkbox" data-pkg-id="${pkg.id}" style="margin: 0 6px 0 0;" ${allPkgChecked ? 'checked' : ''}>
+                        <button type="button" class="tree-toggle-btn" data-pkg-id="${pkg.id}" title="${isPkgExpanded ? 'Contraer carpeta' : 'Expandir carpeta'}">
+                            ${isPkgExpanded ? '−' : '+'}
+                        </button>
+                        <i class="fa-solid ${isPkgExpanded ? 'fa-folder-open' : 'fa-folder'} folder-icon"></i>
+                        <span class="package-name-text" title="Carpeta contenedora: ${pkg.name}">${pkg.name}</span>
+                        <span class="package-badge-count">(${filteredItems.length} archivos)</span>
+                        <button type="button" class="row-action-btn" onclick="handleRenameGrabberPackage(event, ${pkg.id}, '${(pkg.name || '').replace(/'/g, "\\'")}')" title="Renombrar carpeta contenedora" style="padding: 2px 5px; font-size: 10px; margin-left: 4px; opacity: 0.7;">
+                            <i class="fa-solid fa-pen"></i>
+                        </button>
                     </td>
-                    <td>${item.tamanio_fmt || formatBytes(item.total_size)}</td>
-                    <td style="font-size: 11px;">${item.fecha ? formatFecha(item.fecha) : '-'}</td>
-                    <td style="font-size: 11px; color: #777;">
-                        <i class="fa-solid fa-arrow-turn-up fa-rotate-90" style="color: #cbd5e1; margin-right: 4px;"></i>
-                        <span>En: ${pkg.channel_name ? '<span style=\"color:#0369a1;\">' + pkg.channel_name + '</span> \\ ' : ''}<strong>${pkg.name}</strong></span>
+                    <td><strong>${formatBytes(pkgSize)}</strong></td>
+                    <td style="font-size: 11px; color: #555;">${filteredItems.length > 0 && filteredItems[0].fecha ? formatFecha(filteredItems[0].fecha) : '-'}</td>
+                    <td style="font-size: 11px; color: #555; overflow: hidden; text-overflow: ellipsis;" title="${(pkg.custom_dir || 'Ruta por defecto') + ' \\ ' + pkg.name}">
+                        <i class="fa-regular fa-folder" style="color: #888; margin-right: 4px;"></i>
+                        <strong>${pkg.name}</strong>
                     </td>
                     <td style="text-align: center;">
                         <div style="display: inline-flex; gap: 4px; align-items: center; justify-content: center;">
-                            <button type="button" class="row-action-btn" onclick="handleDownloadSingleGrabberItem(event, ${item.id})" title="Descargar este archivo">
-                                <i class="fa-solid fa-download" style="color: #107c10;"></i>
+                            <button type="button" class="row-action-btn start-download-btn" onclick="handleDownloadGrabberPackage(event, ${pkg.id})" title="Descargar todo este paquete" style="padding: 3px 8px; font-size: 11px;">
+                                <i class="fa-solid fa-download"></i> Descargar
                             </button>
-                            <button type="button" class="row-action-btn btn-danger" onclick="handleDeleteSingleGrabberItem(event, ${item.id})" title="Quitar del capturador">
-                                <i class="fa-solid fa-xmark"></i>
+                            <button type="button" class="row-action-btn btn-danger" onclick="handleDeleteGrabberPackage(event, ${pkg.id})" title="Eliminar paquete del capturador">
+                                <i class="fa-solid fa-trash-can"></i>
                             </button>
                         </div>
                     </td>
                 `;
-                
-                const itemCb = trItem.querySelector('.item-check-grabber');
-                itemCb.addEventListener('click', (e) => {
+
+                const pkgCb = trPkg.querySelector('.pkg-check-grabber');
+                if (somePkgChecked && !allPkgChecked) {
+                    pkgCb.indeterminate = true;
+                }
+                pkgCb.addEventListener('click', (e) => {
                     e.stopPropagation();
-                    if (itemCb.checked) selectedGrabberItems.add(item.id);
-                    else selectedGrabberItems.delete(item.id);
-                    updateGrabberSelection();
+                    const checked = pkgCb.checked;
+                    filteredItems.forEach(it => {
+                        if (checked) selectedGrabberItems.add(it.id);
+                        else selectedGrabberItems.delete(it.id);
+                    });
+                    renderGrabberTable();
                 });
-                
-                trItem.addEventListener('click', (e) => {
+
+                const togglePkgBtn = trPkg.querySelector('.tree-toggle-btn');
+                const handlePkgToggle = (e) => {
+                    e.stopPropagation();
+                    if (expandedGrabber.has(pkg.id)) {
+                        expandedGrabber.delete(pkg.id);
+                    } else {
+                        expandedGrabber.add(pkg.id);
+                    }
+                    renderGrabberTable();
+                };
+                togglePkgBtn.addEventListener('click', handlePkgToggle);
+                trPkg.addEventListener('click', (e) => {
                     if (e.target.closest('.row-action-btn') || e.target.type === 'checkbox') return;
-                    itemCb.checked = !itemCb.checked;
-                    if (itemCb.checked) selectedGrabberItems.add(item.id);
-                    else selectedGrabberItems.delete(item.id);
-                    updateGrabberSelection();
+                    handlePkgToggle(e);
                 });
-                
-                bodyGrabber.appendChild(trItem);
+
+                bodyGrabber.appendChild(trPkg);
+
+                // 3. FILAS DE ARCHIVOS (NIVEL 3 - EN CASCADA BAJO EL PAQUETE)
+                if (isPkgExpanded) {
+                    const maxVisible = grabberPkgLimits[pkg.id] || 50;
+                    const visibleItems = filteredItems.slice(0, maxVisible);
+
+                    visibleItems.forEach((item, itemIdx) => {
+                        const isLastItem = (itemIdx === filteredItems.length - 1);
+                        const isSelected = selectedGrabberItems.has(item.id);
+                        const trItem = document.createElement('tr');
+                        trItem.className = `child-file-row ${isSelected ? 'selected' : ''}`;
+                        trItem.dataset.itemId = item.id;
+
+                        trItem.innerHTML = `
+                            <td style="text-align: center;"></td>
+                            <td>
+                                <div style="display:inline-flex;align-items:center;position:relative;height:28px;vertical-align:middle;">
+                                    ${getFileBranchGuideHtml(isLastPkg, isLastItem)}
+                                    <input type="checkbox" class="item-check-grabber tree-item-checkbox" data-item-id="${item.id}" style="margin: 0 6px 0 0;" ${isSelected ? 'checked' : ''}>
+                                    <i class="${getFileIconClass(item.filename)} file-type-icon" style="margin-right: 6px;"></i>
+                                    <span title="${item.filename}">${item.filename}</span>
+                                </div>
+                            </td>
+                            <td>${item.tamanio_fmt || formatBytes(item.total_size)}</td>
+                            <td style="font-size: 11px;">${item.fecha ? formatFecha(item.fecha) : '-'}</td>
+                            <td style="font-size: 11px; color: #777;">
+                                <i class="fa-solid fa-arrow-turn-up fa-rotate-90" style="color: #cbd5e1; margin-right: 4px;"></i>
+                                <span>En: <strong>${pkg.name}</strong></span>
+                            </td>
+                            <td style="text-align: center;">
+                                <div style="display: inline-flex; gap: 4px; align-items: center; justify-content: center;">
+                                    <button type="button" class="row-action-btn" onclick="handleDownloadSingleGrabberItem(event, ${item.id})" title="Descargar este archivo">
+                                        <i class="fa-solid fa-download" style="color: #107c10;"></i>
+                                    </button>
+                                    <button type="button" class="row-action-btn btn-danger" onclick="handleDeleteSingleGrabberItem(event, ${item.id})" title="Quitar del capturador">
+                                        <i class="fa-solid fa-xmark"></i>
+                                    </button>
+                                </div>
+                            </td>
+                        `;
+
+                        const itemCb = trItem.querySelector('.item-check-grabber');
+                        itemCb.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            if (itemCb.checked) selectedGrabberItems.add(item.id);
+                            else selectedGrabberItems.delete(item.id);
+                            updateGrabberSelection();
+                        });
+
+                        trItem.addEventListener('click', (e) => {
+                            if (e.target.closest('.row-action-btn') || e.target.type === 'checkbox') return;
+                            itemCb.checked = !itemCb.checked;
+                            if (itemCb.checked) selectedGrabberItems.add(item.id);
+                            else selectedGrabberItems.delete(item.id);
+                            updateGrabberSelection();
+                        });
+
+                        bodyGrabber.appendChild(trItem);
+                    });
+
+                    if (filteredItems.length > visibleItems.length) {
+                        const trMore = document.createElement('tr');
+                        trMore.className = 'child-file-row show-more-row';
+                        trMore.innerHTML = `
+                            <td style="text-align: center;"></td>
+                            <td colspan="5" style="padding: 9px 16px; background: #f0f7ff; color: #0284c7; font-size: 12px; border-top: 1px dashed #bae6fd;">
+                                <div style="display:inline-flex;align-items:center;">
+                                    ${getFileBranchGuideHtml(isLastPkg, true)}
+                                    <i class="fa-solid fa-layer-group" style="margin-right: 6px;"></i>
+                                    <span>Mostrando <strong>${visibleItems.length}</strong> de <strong>${filteredItems.length}</strong> archivos en este paquete.</span>
+                                    <button type="button" class="btn-more-grabber" style="margin-left: 10px; padding: 3px 10px; font-size: 11px; cursor: pointer; border-radius: 4px; border: 1px solid #0284c7; background: #fff; color: #0284c7; font-weight: 600;">
+                                        <i class="fa-solid fa-plus"></i> Mostrar más (+50)
+                                    </button>
+                                    <button type="button" class="btn-all-grabber" style="margin-left: 6px; padding: 3px 10px; font-size: 11px; cursor: pointer; border-radius: 4px; border: 1px solid #64748b; background: #fff; color: #475569; font-weight: 600;">
+                                        Mostrar todos
+                                    </button>
+                                </div>
+                            </td>
+                        `;
+                        const btnMore = trMore.querySelector('.btn-more-grabber');
+                        btnMore.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            grabberPkgLimits[pkg.id] = (grabberPkgLimits[pkg.id] || 50) + 50;
+                            renderGrabberTable();
+                        });
+                        const btnAll = trMore.querySelector('.btn-all-grabber');
+                        btnAll.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            grabberPkgLimits[pkg.id] = filteredItems.length;
+                            renderGrabberTable();
+                        });
+                        bodyGrabber.appendChild(trMore);
+                    }
+                }
             });
         }
     });
-
-    if (matchingPackages.length > packagesToRender.length) {
-        const trMore = document.createElement('tr');
-        trMore.className = 'grabber-pagination-row';
-        trMore.innerHTML = `
-            <td colspan="6" style="text-align: center; padding: 14px; background: #f8fafc; border-top: 1px solid #e2e8f0;">
-                <span style="font-size: 12px; color: #475569; margin-right: 14px; font-weight: 500;">
-                    Mostrando <strong>${packagesToRender.length}</strong> de <strong>${matchingPackages.length.toLocaleString()}</strong> carpetas
-                </span>
-                <button type="button" class="toolbar-btn" id="btnLoadMoreGrabber" style="padding: 4px 14px; font-size: 11px; display: inline-flex; align-items: center; gap: 5px; cursor: pointer;">
-                    <i class="fa-solid fa-arrow-down"></i> Mostrar 100 más
-                </button>
-                <button type="button" class="toolbar-btn" id="btnLoadAllGrabber" style="padding: 4px 14px; font-size: 11px; margin-left: 8px; display: inline-flex; align-items: center; gap: 5px; cursor: pointer;">
-                    Mostrar todas
-                </button>
-            </td>
-        `;
-        bodyGrabber.appendChild(trMore);
-        trMore.querySelector('#btnLoadMoreGrabber').addEventListener('click', (e) => {
-            e.stopPropagation();
-            grabberDisplayLimit += 100;
-            renderGrabberTable();
-        });
-        trMore.querySelector('#btnLoadAllGrabber').addEventListener('click', (e) => {
-            e.stopPropagation();
-            grabberDisplayLimit = matchingPackages.length;
-            renderGrabberTable();
-        });
-    }
 
     updateGrabberSelection();
 }
@@ -1806,11 +1993,17 @@ if (selectAllGrabber) {
 
 if (btnExpandAllGrabber && txtExpandGrabber) {
     btnExpandAllGrabber.addEventListener('click', () => {
-        if (expandedGrabber.size === grabberPackages.length && grabberPackages.length > 0) {
+        const allChanNames = new Set(grabberPackages.map(p => (p.channel_name || '').trim() || 'Canal Telegram'));
+        const allPkgIds = grabberPackages.map(p => p.id);
+        const isAllOpen = expandedGrabberChannels.size >= allChanNames.size && expandedGrabber.size >= allPkgIds.length;
+
+        if (isAllOpen && grabberPackages.length > 0) {
+            expandedGrabberChannels.clear();
             expandedGrabber.clear();
             txtExpandGrabber.textContent = "Expandir Todo";
         } else {
-            grabberPackages.forEach(p => expandedGrabber.add(p.id));
+            allChanNames.forEach(c => expandedGrabberChannels.add(c));
+            allPkgIds.forEach(id => expandedGrabber.add(id));
             txtExpandGrabber.textContent = "Contraer Todo";
         }
         renderGrabberTable();
@@ -1848,211 +2041,407 @@ function renderDescargasTable() {
     
     const searchTerm = searchDescargasInput ? searchDescargasInput.value.toLowerCase().trim() : '';
     
-    // Agrupar descargas por nombre de paquete
-    const grouped = {};
+    // Agrupar descargas por Canal y luego por Paquete
+    const channelMap = new Map();
     downloadsData.forEach(dl => {
-        if (searchTerm && !dl.nombre.toLowerCase().includes(searchTerm) && !(dl.package_name || '').toLowerCase().includes(searchTerm)) {
+        const dlNameLower = (dl.nombre || '').toLowerCase();
+        const pkgName = dl.package_name || 'Descargas';
+        const pkgNameLower = pkgName.toLowerCase();
+        const chanName = (dl.channel_name || '').trim() || 'Descargas Directas';
+        const chanNameLower = chanName.toLowerCase();
+
+        if (searchTerm && !dlNameLower.includes(searchTerm) && !pkgNameLower.includes(searchTerm) && !chanNameLower.includes(searchTerm)) {
             return;
         }
-        const pkgName = dl.package_name || 'Descargas';
-        if (!grouped[pkgName]) grouped[pkgName] = [];
-        grouped[pkgName].push(dl);
+
+        if (!channelMap.has(chanName)) {
+            channelMap.set(chanName, { channelName: chanName, packages: new Map() });
+        }
+        const pkgs = channelMap.get(chanName).packages;
+        if (!pkgs.has(pkgName)) {
+            pkgs.set(pkgName, []);
+        }
+        pkgs.get(pkgName).push(dl);
     });
-    
-    const packageNames = Object.keys(grouped);
-    if (packageNames.length === 0) {
+
+    if (channelMap.size === 0) {
         bodyDescargas.innerHTML = `<tr><td colspan="8" style="text-align: center; color: #6b7280; padding: 25px;">No se encontraron descargas que coincidan con la búsqueda.</td></tr>`;
         updateDescargasSelection();
         return;
     }
-    
-    packageNames.forEach(pkgName => {
-        const items = grouped[pkgName];
-        const isExpanded = expandedDescargas.has(pkgName);
-        
-        let pkgTotalSize = 0;
-        let pkgDownloadedBytes = 0;
-        let activeDownloading = 0;
-        let hasPaused = false;
-        let hasStopped = false;
-        let allDone = true;
-        
-        items.forEach(it => {
-            pkgTotalSize += (it.tamanio || 0);
-            const downloaded = itemProgress[it.db_id] !== undefined ? itemProgress[it.db_id] : (it.downloaded_bytes || 0);
-            pkgDownloadedBytes += downloaded;
-            
-            const st = itemStates[it.db_id] || it.state;
-            if (st === 'downloading') activeDownloading++;
-            if (st === 'paused') hasPaused = true;
-            if (st === 'stopped') hasStopped = true;
-            if (st !== 'done') allDone = false;
+
+    // Si hay búsqueda activa, expandir automáticamente canales y paquetes que coincidan
+    if (searchTerm) {
+        channelMap.forEach(({ channelName, packages }) => {
+            expandedDescargasChannels.add(channelName);
+            packages.forEach((_, pkgName) => expandedDescargas.add(`${channelName}:::${pkgName}`));
         });
-        
-        const pkgPercent = pkgTotalSize > 0 ? ((pkgDownloadedBytes / pkgTotalSize) * 100).toFixed(1) : 0;
-        const allItemsChecked = items.every(it => selectedDownloads.has(it.db_id));
-        const someItemsChecked = items.some(it => selectedDownloads.has(it.db_id));
-        
-        // Determinar estado agregado del paquete
-        let pkgStateText = 'En cola';
-        let pkgColor = '#666';
-        if (allDone) {
-            pkgStateText = 'Completado';
-            pkgColor = '#107c10';
-        } else if (activeDownloading > 0) {
-            pkgStateText = `Descargando (${activeDownloading})`;
-            pkgColor = '#0078d7';
-        } else if (hasPaused) {
-            pkgStateText = 'Pausado';
-            pkgColor = '#d97706';
-        } else if (hasStopped) {
-            pkgStateText = 'Detenido';
-            pkgColor = '#d92d20';
+    }
+
+    channelMap.forEach(({ channelName, packages }) => {
+        // Calcular estadísticas acumuladas del Canal
+        const allChanItems = [];
+        let chanTotalSize = 0;
+        let chanDownloaded = 0;
+        let chanActiveDownloading = 0;
+        let chanHasPaused = false;
+        let chanHasStopped = false;
+        let chanHasError = false;
+        let chanAllDone = true;
+
+        packages.forEach((items) => {
+            items.forEach(it => {
+                allChanItems.push(it);
+                chanTotalSize += (it.tamanio || 0);
+                const downloaded = itemProgress[it.db_id] !== undefined ? itemProgress[it.db_id] : (it.downloaded_bytes || 0);
+                chanDownloaded += downloaded;
+
+                const st = itemStates[it.db_id] || it.state;
+                if (st === 'downloading') chanActiveDownloading++;
+                if (st === 'paused') chanHasPaused = true;
+                if (st === 'stopped') chanHasStopped = true;
+                if (st === 'error') chanHasError = true;
+                if (st !== 'done') chanAllDone = false;
+            });
+        });
+
+        const chanPercent = chanTotalSize > 0 ? ((chanDownloaded / chanTotalSize) * 100).toFixed(1) : 0;
+        const allChanChecked = allChanItems.length > 0 && allChanItems.every(it => selectedDownloads.has(it.db_id));
+        const someChanChecked = allChanItems.some(it => selectedDownloads.has(it.db_id));
+        const isChanExpanded = expandedDescargasChannels.has(channelName);
+        const latestDate = allChanItems.find(it => it.fecha)?.fecha || '';
+
+        let chanStateText = 'En cola';
+        let chanColor = '#666';
+        if (chanAllDone) {
+            chanStateText = 'Completado';
+            chanColor = '#107c10';
+        } else if (chanActiveDownloading > 0) {
+            chanStateText = `Descargando (${chanActiveDownloading})`;
+            chanColor = '#0078d7';
+        } else if (chanHasPaused) {
+            chanStateText = 'Pausado';
+            chanColor = '#d97706';
+        } else if (chanHasError) {
+            chanStateText = 'Error';
+            chanColor = '#d92d20';
+        } else if (chanHasStopped) {
+            chanStateText = 'Detenido';
+            chanColor = '#d92d20';
         }
-        
-        // 1. Fila de Paquete en Descargas
-        const trPkg = document.createElement('tr');
-        trPkg.className = 'package-row';
-        trPkg.id = `pkg-dl-row-${encodeURIComponent(pkgName)}`;
-        
-        trPkg.innerHTML = `
+
+        // 1. FILA DE CANAL EN DESCARGAS (NIVEL 1 - RAÍZ)
+        const trChan = document.createElement('tr');
+        trChan.className = 'channel-row';
+        trChan.id = `chan-dl-row-${encodeURIComponent(channelName)}`;
+        trChan.dataset.channelName = channelName;
+
+        trChan.innerHTML = `
             <td style="text-align: center;">
-                <input type="checkbox" class="pkg-check-descargas" data-pkg-name="${pkgName}" ${allItemsChecked ? 'checked' : ''}>
+                <input type="checkbox" class="chan-check-descargas" data-channel-name="${channelName}" ${allChanChecked ? 'checked' : ''}>
             </td>
             <td>
-                <button type="button" class="tree-toggle-btn" data-pkg-name="${pkgName}" title="${isExpanded ? 'Contraer carpeta' : 'Expandir carpeta'}">
-                    ${isExpanded ? '−' : '+'}
+                <button type="button" class="tree-toggle-btn" data-channel-name="${channelName}" title="${isChanExpanded ? 'Contraer canal' : 'Expandir canal'}">
+                    ${isChanExpanded ? '−' : '+'}
                 </button>
-                <i class="fa-solid ${isExpanded ? 'fa-folder-open' : 'fa-folder'} folder-icon"></i>
-                <span style="font-weight: 600; color: #1e3a5f;">${pkgName}</span>
-                <span class="package-badge-count">(${items.length} archivos)</span>
-                ${items[0] && items[0].channel_name ? `<span class="channel-badge" style="background: #e0f2fe; color: #0369a1; padding: 2px 7px; border-radius: 4px; font-size: 11px; margin-left: 6px; font-weight: 500;" title="Canal de Telegram: ${items[0].channel_name}"><i class="fa-brands fa-telegram"></i> ${items[0].channel_name}</span>` : ''}
+                <i class="fa-solid ${isChanExpanded ? 'fa-folder-open' : 'fa-folder'} folder-icon"></i>
+                <span class="channel-badge-pill" title="Canal: ${channelName}">
+                    <i class="fa-brands fa-telegram"></i> ${channelName}
+                </span>
+                <span class="package-badge-count">(${packages.size} carpetas, ${allChanItems.length} archivos)</span>
             </td>
-            <td><strong>${formatBytes(pkgTotalSize)}</strong></td>
-            <td style="font-size: 11px; color: #555;">${items.length > 0 && items[0].fecha ? formatFecha(items[0].fecha) : '-'}</td>
-            <td id="pkg-comp-${encodeURIComponent(pkgName)}">${formatBytes(pkgDownloadedBytes)}</td>
+            <td><strong>${formatBytes(chanTotalSize)}</strong></td>
+            <td style="font-size: 11px; color: #555;">${latestDate ? formatFecha(latestDate) : '-'}</td>
+            <td id="chan-comp-${encodeURIComponent(channelName)}">${formatBytes(chanDownloaded)}</td>
             <td>
                 <div class="progress-bar-cell">
-                    <div class="progress-bar-fill" id="pkg-perc-fill-${encodeURIComponent(pkgName)}" style="width: ${pkgPercent}%; background-color: ${allDone ? '#107c10' : '#0078d7'};"></div>
-                    <div class="progress-bar-text" id="pkg-perc-text-${encodeURIComponent(pkgName)}">${pkgPercent}%</div>
+                    <div class="progress-bar-fill" id="chan-perc-fill-${encodeURIComponent(channelName)}" style="width: ${chanPercent}%; background-color: ${chanAllDone ? '#107c10' : '#0078d7'};"></div>
+                    <div class="progress-bar-text" id="chan-perc-text-${encodeURIComponent(channelName)}">${chanPercent}%</div>
                 </div>
             </td>
-            <td style="font-size: 11px; font-weight: 600; color: ${pkgColor};" id="pkg-spd-${encodeURIComponent(pkgName)}">
-                ${pkgStateText}
+            <td style="font-size: 11px; font-weight: 600; color: ${chanColor};" id="chan-spd-${encodeURIComponent(channelName)}">
+                ${chanStateText}
             </td>
             <td style="text-align: center;">
                 <div style="display: inline-flex; gap: 4px; align-items: center; justify-content: center;">
-                    <button type="button" class="row-action-btn" onclick="handleTogglePackage(event, '${pkgName.replace(/'/g, "\\'")}')" title="Pausar / Reanudar paquete">
-                        <i class="fa-solid ${activeDownloading > 0 ? 'fa-pause' : 'fa-play'}" style="color: ${activeDownloading > 0 ? '#d97706' : '#107c10'};"></i>
+                    <button type="button" class="row-action-btn" onclick="handleToggleChannel(event, '${channelName.replace(/'/g, "\\'")}')" title="Pausar / Reanudar canal">
+                        <i class="fa-solid ${chanActiveDownloading > 0 ? 'fa-pause' : 'fa-play'}" style="color: ${chanActiveDownloading > 0 ? '#d97706' : '#107c10'};"></i>
                     </button>
-                    <button type="button" class="row-action-btn btn-danger" onclick="handleDeletePackage(event, '${pkgName.replace(/'/g, "\\'")}')" title="Eliminar paquete de la lista">
+                    <button type="button" class="row-action-btn btn-danger" onclick="handleDeleteChannel(event, '${channelName.replace(/'/g, "\\'")}')" title="Eliminar todo el canal del historial">
                         <i class="fa-solid fa-trash-can"></i>
                     </button>
                 </div>
             </td>
         `;
-        
-        const pkgCb = trPkg.querySelector('.pkg-check-descargas');
-        if (someItemsChecked && !allItemsChecked) {
-            pkgCb.indeterminate = true;
+
+        const chanCb = trChan.querySelector('.chan-check-descargas');
+        if (someChanChecked && !allChanChecked) {
+            chanCb.indeterminate = true;
         }
-        pkgCb.addEventListener('click', (e) => {
+        chanCb.addEventListener('click', (e) => {
             e.stopPropagation();
-            const checked = pkgCb.checked;
-            items.forEach(it => {
+            const checked = chanCb.checked;
+            allChanItems.forEach(it => {
                 if (checked) selectedDownloads.add(it.db_id);
                 else selectedDownloads.delete(it.db_id);
             });
             renderDescargasTable();
         });
-        
-        const toggleBtn = trPkg.querySelector('.tree-toggle-btn');
-        const handleToggle = (e) => {
+
+        const toggleChanBtn = trChan.querySelector('.tree-toggle-btn');
+        const handleChanToggle = (e) => {
             e.stopPropagation();
-            if (expandedDescargas.has(pkgName)) {
-                expandedDescargas.delete(pkgName);
+            if (expandedDescargasChannels.has(channelName)) {
+                expandedDescargasChannels.delete(channelName);
             } else {
-                expandedDescargas.add(pkgName);
+                expandedDescargasChannels.add(channelName);
             }
             renderDescargasTable();
         };
-        toggleBtn.addEventListener('click', handleToggle);
-        trPkg.addEventListener('click', (e) => {
+        toggleChanBtn.addEventListener('click', handleChanToggle);
+        trChan.addEventListener('click', (e) => {
             if (e.target.closest('.row-action-btn') || e.target.type === 'checkbox') return;
-            handleToggle(e);
+            handleChanToggle(e);
         });
-        
-        bodyDescargas.appendChild(trPkg);
-        
-        // 2. Filas de Archivos en Descargas (si la carpeta está expandida)
-        if (isExpanded) {
-            items.forEach(item => {
-                const dbId = item.db_id;
-                const isSelected = selectedDownloads.has(dbId);
-                const state = itemStates[dbId] || item.state;
-                const downloaded = itemProgress[dbId] !== undefined ? itemProgress[dbId] : (item.downloaded_bytes || 0);
-                const percent = item.total_size > 0 ? ((downloaded / item.total_size) * 100).toFixed(1) : 0;
-                
-                const trItem = document.createElement('tr');
-                trItem.className = `child-file-row ${isSelected ? 'selected' : ''}`;
-                trItem.id = `row-dl-${dbId}`;
-                trItem.dataset.dbId = dbId;
-                
-                trItem.innerHTML = `
-                    <td></td>
+
+        bodyDescargas.appendChild(trChan);
+
+        // 2. FILAS DE PAQUETES (NIVEL 2 - EN CASCADA BAJO EL CANAL)
+        if (isChanExpanded) {
+            const pkgEntries = Array.from(packages.entries());
+            pkgEntries.forEach(([pkgName, items], pkgIdx) => {
+                const isLastPkg = (pkgIdx === pkgEntries.length - 1);
+                const pkgKey = `${channelName}:::${pkgName}`;
+                const isPkgExpanded = expandedDescargas.has(pkgKey) || expandedDescargas.has(pkgName);
+
+                let pkgTotalSize = 0;
+                let pkgDownloadedBytes = 0;
+                let activeDownloading = 0;
+                let hasPaused = false;
+                let hasStopped = false;
+                let hasError = false;
+                let allDone = true;
+
+                items.forEach(it => {
+                    pkgTotalSize += (it.tamanio || 0);
+                    const downloaded = itemProgress[it.db_id] !== undefined ? itemProgress[it.db_id] : (it.downloaded_bytes || 0);
+                    pkgDownloadedBytes += downloaded;
+
+                    const st = itemStates[it.db_id] || it.state;
+                    if (st === 'downloading') activeDownloading++;
+                    if (st === 'paused') hasPaused = true;
+                    if (st === 'stopped') hasStopped = true;
+                    if (st === 'error') hasError = true;
+                    if (st !== 'done') allDone = false;
+                });
+
+                const pkgPercent = pkgTotalSize > 0 ? ((pkgDownloadedBytes / pkgTotalSize) * 100).toFixed(1) : 0;
+                const allItemsChecked = items.length > 0 && items.every(it => selectedDownloads.has(it.db_id));
+                const someItemsChecked = items.some(it => selectedDownloads.has(it.db_id));
+
+                let pkgStateText = 'En cola';
+                let pkgColor = '#666';
+                if (allDone) {
+                    pkgStateText = 'Completado';
+                    pkgColor = '#107c10';
+                } else if (activeDownloading > 0) {
+                    pkgStateText = `Descargando (${activeDownloading})`;
+                    pkgColor = '#0078d7';
+                } else if (hasPaused) {
+                    pkgStateText = 'Pausado';
+                    pkgColor = '#d97706';
+                } else if (hasError) {
+                    pkgStateText = 'Error';
+                    pkgColor = '#d92d20';
+                } else if (hasStopped) {
+                    pkgStateText = 'Detenido';
+                    pkgColor = '#d92d20';
+                }
+
+                const trPkg = document.createElement('tr');
+                trPkg.className = 'package-row';
+                trPkg.id = `pkg-dl-row-${encodeURIComponent(pkgKey)}`;
+
+                trPkg.innerHTML = `
+                    <td style="text-align: center;"></td>
                     <td>
-                        <span class="child-indent"></span>
-                        <input type="checkbox" class="item-check-descargas tree-item-checkbox" data-db-id="${dbId}" ${isSelected ? 'checked' : ''}>
-                        <i class="${getFileIconClass(item.nombre)} file-type-icon"></i>
-                        <span title="${item.nombre}">${item.nombre}</span>
+                        ${getPackageBranchGuideHtml(isLastPkg)}
+                        <input type="checkbox" class="pkg-check-descargas tree-item-checkbox" data-pkg-key="${pkgKey}" style="margin: 0 6px 0 0;" ${allItemsChecked ? 'checked' : ''}>
+                        <button type="button" class="tree-toggle-btn" data-pkg-key="${pkgKey}" title="${isPkgExpanded ? 'Contraer carpeta' : 'Expandir carpeta'}">
+                            ${isPkgExpanded ? '−' : '+'}
+                        </button>
+                        <i class="fa-solid ${isPkgExpanded ? 'fa-folder-open' : 'fa-folder'} folder-icon"></i>
+                        <span class="package-name-text">${pkgName}</span>
+                        <span class="package-badge-count">(${items.length} archivos)</span>
                     </td>
-                    <td>${item.tamanio_fmt || formatBytes(item.total_size)}</td>
-                    <td style="font-size: 11px; white-space: nowrap;">${item.fecha ? formatFecha(item.fecha) : '-'}</td>
-                    <td id="comp-dl-${dbId}">${formatBytes(downloaded)}</td>
+                    <td><strong>${formatBytes(pkgTotalSize)}</strong></td>
+                    <td style="font-size: 11px; color: #555;">${items.length > 0 && items[0].fecha ? formatFecha(items[0].fecha) : '-'}</td>
+                    <td id="pkg-comp-${encodeURIComponent(pkgKey)}">${formatBytes(pkgDownloadedBytes)}</td>
                     <td>
                         <div class="progress-bar-cell">
-                            <div class="progress-bar-fill" id="perc-fill-dl-${dbId}" style="width: ${state === 'done' ? 100 : percent}%;"></div>
-                            <div class="progress-bar-text" id="perc-text-dl-${dbId}">${state === 'done' ? '100%' : percent + '%'}</div>
+                            <div class="progress-bar-fill" id="pkg-perc-fill-${encodeURIComponent(pkgKey)}" style="width: ${pkgPercent}%; background-color: ${allDone ? '#107c10' : '#0078d7'};"></div>
+                            <div class="progress-bar-text" id="pkg-perc-text-${encodeURIComponent(pkgKey)}">${pkgPercent}%</div>
                         </div>
                     </td>
-                    <td id="spd-dl-${dbId}">-</td>
+                    <td style="font-size: 11px; font-weight: 600; color: ${pkgColor};" id="pkg-spd-${encodeURIComponent(pkgKey)}">
+                        ${pkgStateText}
+                    </td>
                     <td style="text-align: center;">
                         <div style="display: inline-flex; gap: 4px; align-items: center; justify-content: center;">
-                            <button type="button" class="row-action-btn" id="btn-toggle-dl-${dbId}" onclick="handleToggleDownload(event, ${dbId})" title="Iniciar / Pausar / Reanudar">
-                                <i class="fa-solid fa-play"></i>
+                            <button type="button" class="row-action-btn" onclick="handleTogglePackage(event, '${pkgName.replace(/'/g, "\\'")}')" title="Pausar / Reanudar paquete">
+                                <i class="fa-solid ${activeDownloading > 0 ? 'fa-pause' : 'fa-play'}" style="color: ${activeDownloading > 0 ? '#d97706' : '#107c10'};"></i>
                             </button>
-                            <button type="button" class="row-action-btn btn-danger" id="btn-stop-dl-${dbId}" onclick="handleStopDownload(event, ${dbId})" title="Detener" style="display: none;">
-                                <i class="fa-solid fa-stop"></i>
-                            </button>
-                            <button type="button" class="row-action-btn btn-danger" id="btn-del-dl-${dbId}" onclick="handleDeleteDownload(event, ${dbId})" title="Eliminar del historial">
-                                <i class="fa-solid fa-xmark"></i>
+                            <button type="button" class="row-action-btn btn-danger" onclick="handleDeletePackage(event, '${pkgName.replace(/'/g, "\\'")}')" title="Eliminar paquete de la lista">
+                                <i class="fa-solid fa-trash-can"></i>
                             </button>
                         </div>
                     </td>
                 `;
-                
-                const itemCb = trItem.querySelector('.item-check-descargas');
-                itemCb.addEventListener('click', (e) => {
+
+                const pkgCb = trPkg.querySelector('.pkg-check-descargas');
+                if (someItemsChecked && !allItemsChecked) {
+                    pkgCb.indeterminate = true;
+                }
+                pkgCb.addEventListener('click', (e) => {
                     e.stopPropagation();
-                    if (itemCb.checked) selectedDownloads.add(dbId);
-                    else selectedDownloads.delete(dbId);
-                    updateDescargasSelection();
+                    const checked = pkgCb.checked;
+                    items.forEach(it => {
+                        if (checked) selectedDownloads.add(it.db_id);
+                        else selectedDownloads.delete(it.db_id);
+                    });
+                    renderDescargasTable();
                 });
-                
-                trItem.addEventListener('click', (e) => {
+
+                const togglePkgBtn = trPkg.querySelector('.tree-toggle-btn');
+                const handlePkgToggle = (e) => {
+                    e.stopPropagation();
+                    if (expandedDescargas.has(pkgKey) || expandedDescargas.has(pkgName)) {
+                        expandedDescargas.delete(pkgKey);
+                        expandedDescargas.delete(pkgName);
+                    } else {
+                        expandedDescargas.add(pkgKey);
+                    }
+                    renderDescargasTable();
+                };
+                togglePkgBtn.addEventListener('click', handlePkgToggle);
+                trPkg.addEventListener('click', (e) => {
                     if (e.target.closest('.row-action-btn') || e.target.type === 'checkbox') return;
-                    itemCb.checked = !itemCb.checked;
-                    if (itemCb.checked) selectedDownloads.add(dbId);
-                    else selectedDownloads.delete(dbId);
-                    updateDescargasSelection();
+                    handlePkgToggle(e);
                 });
-                
-                bodyDescargas.appendChild(trItem);
-                updateDownloadRowUI(dbId, state);
+
+                bodyDescargas.appendChild(trPkg);
+
+                // 3. FILAS DE ARCHIVOS EN DESCARGAS (NIVEL 3 - EN CASCADA BAJO EL PAQUETE)
+                if (isPkgExpanded) {
+                    const maxVisible = descargasPkgLimits[pkgKey] || descargasPkgLimits[pkgName] || 50;
+                    const visibleItems = items.slice(0, maxVisible);
+
+                    visibleItems.forEach((item, itemIdx) => {
+                        const isLastItem = (itemIdx === items.length - 1);
+                        const dbId = item.db_id;
+                        const isSelected = selectedDownloads.has(dbId);
+                        const state = itemStates[dbId] || item.state;
+                        const downloaded = itemProgress[dbId] !== undefined ? itemProgress[dbId] : (item.downloaded_bytes || 0);
+                        const percent = item.total_size > 0 ? ((downloaded / item.total_size) * 100).toFixed(1) : 0;
+
+                        const trItem = document.createElement('tr');
+                        trItem.className = `child-file-row ${isSelected ? 'selected' : ''}`;
+                        trItem.id = `row-dl-${dbId}`;
+                        trItem.dataset.dbId = dbId;
+
+                        trItem.innerHTML = `
+                            <td style="text-align: center;"></td>
+                            <td>
+                                <div style="display:inline-flex;align-items:center;position:relative;height:28px;vertical-align:middle;">
+                                    ${getFileBranchGuideHtml(isLastPkg, isLastItem)}
+                                    <input type="checkbox" class="item-check-descargas tree-item-checkbox" data-db-id="${dbId}" style="margin: 0 6px 0 0;" ${isSelected ? 'checked' : ''}>
+                                    <i class="${getFileIconClass(item.nombre)} file-type-icon" style="margin-right: 6px;"></i>
+                                    <span title="${item.nombre}">${item.nombre}</span>
+                                </div>
+                            </td>
+                            <td>${item.tamanio_fmt || formatBytes(item.total_size)}</td>
+                            <td style="font-size: 11px; white-space: nowrap;">${item.fecha ? formatFecha(item.fecha) : '-'}</td>
+                            <td id="comp-dl-${dbId}">${formatBytes(downloaded)}</td>
+                            <td>
+                                <div class="progress-bar-cell">
+                                    <div class="progress-bar-fill" id="perc-fill-dl-${dbId}" style="width: ${state === 'done' ? 100 : percent}%;"></div>
+                                    <div class="progress-bar-text" id="perc-text-dl-${dbId}">${state === 'done' ? '100%' : percent + '%'}</div>
+                                </div>
+                            </td>
+                            <td id="spd-dl-${dbId}">-</td>
+                            <td style="text-align: center;">
+                                <div style="display: inline-flex; gap: 4px; align-items: center; justify-content: center;">
+                                    <button type="button" class="row-action-btn" id="btn-toggle-dl-${dbId}" onclick="handleToggleDownload(event, ${dbId})" title="Iniciar / Pausar / Reanudar">
+                                        <i class="fa-solid fa-play"></i>
+                                    </button>
+                                    <button type="button" class="row-action-btn btn-danger" id="btn-stop-dl-${dbId}" onclick="handleStopDownload(event, ${dbId})" title="Detener" style="display: none;">
+                                        <i class="fa-solid fa-stop"></i>
+                                    </button>
+                                    <button type="button" class="row-action-btn btn-danger" id="btn-del-dl-${dbId}" onclick="handleDeleteDownload(event, ${dbId})" title="Eliminar del historial">
+                                        <i class="fa-solid fa-xmark"></i>
+                                    </button>
+                                </div>
+                            </td>
+                        `;
+
+                        const itemCb = trItem.querySelector('.item-check-descargas');
+                        itemCb.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            if (itemCb.checked) selectedDownloads.add(dbId);
+                            else selectedDownloads.delete(dbId);
+                            updateDescargasSelection();
+                        });
+
+                        trItem.addEventListener('click', (e) => {
+                            if (e.target.closest('.row-action-btn') || e.target.type === 'checkbox') return;
+                            itemCb.checked = !itemCb.checked;
+                            if (itemCb.checked) selectedDownloads.add(dbId);
+                            else selectedDownloads.delete(dbId);
+                            updateDescargasSelection();
+                        });
+
+                        bodyDescargas.appendChild(trItem);
+                        updateDownloadRowUI(dbId, state);
+                    });
+
+                    if (items.length > visibleItems.length) {
+                        const trMore = document.createElement('tr');
+                        trMore.className = 'child-file-row show-more-row';
+                        trMore.innerHTML = `
+                            <td style="text-align: center;"></td>
+                            <td colspan="7" style="padding: 9px 16px; background: #f0f7ff; color: #0284c7; font-size: 12px; border-top: 1px dashed #bae6fd;">
+                                <div style="display:inline-flex;align-items:center;">
+                                    ${getFileBranchGuideHtml(isLastPkg, true)}
+                                    <i class="fa-solid fa-layer-group" style="margin-right: 6px;"></i>
+                                    <span>Mostrando <strong>${visibleItems.length}</strong> de <strong>${items.length}</strong> archivos en esta carpeta.</span>
+                                    <button type="button" class="btn-more-items" style="margin-left: 10px; padding: 3px 10px; font-size: 11px; cursor: pointer; border-radius: 4px; border: 1px solid #0284c7; background: #fff; color: #0284c7; font-weight: 600;">
+                                        <i class="fa-solid fa-plus"></i> Mostrar más (+50)
+                                    </button>
+                                    <button type="button" class="btn-all-items" style="margin-left: 6px; padding: 3px 10px; font-size: 11px; cursor: pointer; border-radius: 4px; border: 1px solid #64748b; background: #fff; color: #475569; font-weight: 600;">
+                                        Mostrar todos
+                                    </button>
+                                </div>
+                            </td>
+                        `;
+                        const btnMore = trMore.querySelector('.btn-more-items');
+                        btnMore.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            descargasPkgLimits[pkgKey] = (descargasPkgLimits[pkgKey] || 50) + 50;
+                            renderDescargasTable();
+                        });
+                        const btnAll = trMore.querySelector('.btn-all-items');
+                        btnAll.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            descargasPkgLimits[pkgKey] = items.length;
+                            renderDescargasTable();
+                        });
+                        bodyDescargas.appendChild(trMore);
+                    }
+                }
             });
         }
     });
-    
+
     updateDescargasSelection();
 }
 
@@ -2099,12 +2488,17 @@ if (selectAllDescargas) {
 
 if (btnExpandAllDescargas && txtExpandDescargas) {
     btnExpandAllDescargas.addEventListener('click', () => {
-        const allPackageNames = [...new Set(downloadsData.map(d => d.package_name || 'Descargas'))];
-        if (expandedDescargas.size === allPackageNames.length && allPackageNames.length > 0) {
+        const allChanNames = new Set(downloadsData.map(d => (d.channel_name || '').trim() || 'Descargas Directas'));
+        const allPkgKeys = new Set(downloadsData.map(d => `${(d.channel_name || '').trim() || 'Descargas Directas'}:::${d.package_name || 'Descargas'}`));
+        const isAllOpen = expandedDescargasChannels.size >= allChanNames.size && expandedDescargas.size >= allPkgKeys.size;
+
+        if (isAllOpen && downloadsData.length > 0) {
+            expandedDescargasChannels.clear();
             expandedDescargas.clear();
             txtExpandDescargas.textContent = "Expandir Todo";
         } else {
-            allPackageNames.forEach(name => expandedDescargas.add(name));
+            allChanNames.forEach(c => expandedDescargasChannels.add(c));
+            allPkgKeys.forEach(k => expandedDescargas.add(k));
             txtExpandDescargas.textContent = "Contraer Todo";
         }
         renderDescargasTable();
@@ -2251,12 +2645,19 @@ async function loadDirectory(targetPath = '') {
         }
 
         // Renderizar accesos rápidos locales
-        if (quickFoldersContainer && quickFoldersContainer.children.length === 0 && data.common) {
+        if (quickFoldersContainer && data.common) {
+            quickFoldersContainer.innerHTML = '';
             data.common.forEach(item => {
                 const btn = document.createElement('button');
                 btn.type = 'button';
                 btn.className = 'quick-folder-btn';
-                btn.innerHTML = `<i class="fa-solid ${item.icon}"></i> <span>${item.name}</span>`;
+                if (item.is_usb) {
+                    btn.style.borderColor = '#86efac';
+                    btn.style.color = '#15803d';
+                    btn.style.background = '#f0fdf4';
+                }
+                const iconClass = (item.icon && item.icon.includes(' ')) ? item.icon : (item.icon ? (item.icon.startsWith('fa-') ? `fa-solid ${item.icon}` : item.icon) : 'fa-solid fa-folder');
+                btn.innerHTML = `<i class="${iconClass}"></i> <span>${escapeHtml(item.name)}</span>`;
                 btn.addEventListener('click', () => loadDirectory(item.path));
                 quickFoldersContainer.appendChild(btn);
             });
@@ -2273,7 +2674,7 @@ async function loadDirectory(targetPath = '') {
                     btn.className = 'quick-folder-btn';
                     btn.style.borderColor = '#7dd3fc';
                     btn.style.color = '#0284c7';
-                    btn.innerHTML = `<i class="fa-solid fa-network-wired"></i> <span title="${share.remote}">${share.name}</span>`;
+                    btn.innerHTML = `<i class="fa-solid fa-network-wired"></i> <span title="${escapeHtml(share.remote)}">${escapeHtml(share.name)}</span>`;
                     btn.addEventListener('click', () => {
                         const targetDriveOrUnc = share.drive || share.remote;
                         loadDirectory(targetDriveOrUnc);
@@ -2285,15 +2686,56 @@ async function loadDirectory(targetPath = '') {
             }
         }
 
-        // Renderizar unidades de disco o volúmenes (C:\, D:\ o /, /volume1)
+        // Renderizar discos USB y almacenamiento externo detectados
+        const usbDrivesSection = document.getElementById('usbDrivesSection');
+        const usbDrivesContainer = document.getElementById('usbDrivesContainer');
+        if (usbDrivesSection && usbDrivesContainer) {
+            usbDrivesContainer.innerHTML = '';
+            if (data.usb_drives && data.usb_drives.length > 0) {
+                usbDrivesSection.style.display = 'block';
+                data.usb_drives.forEach(uDrive => {
+                    const btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.className = 'quick-folder-btn';
+                    btn.style.borderColor = '#86efac';
+                    btn.style.color = '#15803d';
+                    btn.style.background = '#f0fdf4';
+                    btn.innerHTML = `<i class="fa-brands fa-usb" style="font-size: 13px; color: #16a34a;"></i> <span title="${escapeHtml(uDrive.path)}">${escapeHtml(uDrive.name)}</span>`;
+                    btn.addEventListener('click', () => loadDirectory(uDrive.path));
+                    usbDrivesContainer.appendChild(btn);
+                });
+            } else {
+                usbDrivesSection.style.display = 'none';
+            }
+        }
+
+        // Mostrar banner informativo si está en Docker en Synology y no hay USBs montados
+        const dockerUsbBanner = document.getElementById('dockerUsbBanner');
+        const dockerUsbBannerText = document.getElementById('dockerUsbBannerText');
+        if (dockerUsbBanner && dockerUsbBannerText) {
+            if (data.docker_usb_warning) {
+                dockerUsbBanner.style.display = 'block';
+                dockerUsbBannerText.textContent = data.docker_usb_warning;
+            } else {
+                dockerUsbBanner.style.display = 'none';
+            }
+        }
+
+        // Renderizar unidades de disco o volúmenes (C:\, D:\ o /, /volume1, /volumeUSB1)
         if (folderDrives && data.drives) {
             folderDrives.innerHTML = '';
             data.drives.forEach(drv => {
                 const btn = document.createElement('button');
                 btn.type = 'button';
                 const isCurrentDrive = data.current.toLowerCase().startsWith(drv.toLowerCase());
+                const isUsb = drv.toLowerCase().includes('usb') || drv.toLowerCase().includes('external');
                 btn.className = `folder-drive-btn ${isCurrentDrive ? 'active' : ''}`;
-                btn.textContent = drv.endsWith('\\') ? drv.replace('\\', '') : drv;
+                if (isUsb) {
+                    btn.style.borderColor = '#86efac';
+                    btn.innerHTML = `<i class="fa-brands fa-usb" style="color: #16a34a; margin-right: 3px;"></i>${escapeHtml(drv.endsWith('\\') ? drv.replace('\\', '') : drv)}`;
+                } else {
+                    btn.textContent = drv.endsWith('\\') ? drv.replace('\\', '') : drv;
+                }
                 btn.addEventListener('click', () => loadDirectory(drv));
                 folderDrives.appendChild(btn);
             });
@@ -2729,6 +3171,129 @@ const btnStartGrabberDownloads = document.getElementById('btnStartGrabberDownloa
 const btnDeleteSelectedGrabber = document.getElementById('btnDeleteSelectedGrabber');
 const btnClearGrabber = document.getElementById('btnClearGrabber');
 
+async function startDownloadsWithOverwritePrompt(payloadItems, customDir, includeDate, removeFromGrabber = true, triggerBtn = null) {
+    if (!payloadItems || payloadItems.length === 0) {
+        showToast('No hay elementos seleccionados para descargar.', 'error');
+        return;
+    }
+
+    let origBtnHtml = '';
+    if (triggerBtn) {
+        origBtnHtml = triggerBtn.innerHTML;
+        triggerBtn.disabled = true;
+        triggerBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Verificando...';
+    }
+
+    let alreadyDownloaded = [];
+    try {
+        const checkRes = await fetch(`${API_BASE}/downloads/check_existing`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                items: payloadItems,
+                custom_dir: customDir
+            })
+        });
+        const checkData = await checkRes.json();
+        if (checkData.success && checkData.already_downloaded) {
+            alreadyDownloaded = checkData.already_downloaded;
+        }
+    } catch (e) {
+        console.warn('No se pudo verificar el historial:', e);
+    } finally {
+        if (triggerBtn) {
+            triggerBtn.disabled = false;
+            triggerBtn.innerHTML = origBtnHtml;
+        }
+    }
+
+    let overwrite = false;
+    let itemsToProcess = payloadItems;
+
+    if (alreadyDownloaded.length > 0) {
+        const total = payloadItems.length;
+        const count = alreadyDownloaded.length;
+        const msg = count === 1
+            ? `El archivo <strong>${escapeHtml(alreadyDownloaded[0].filename)}</strong> ya figura como descargado en el historial o existe en el disco.`
+            : `Se han detectado <strong>${count} de ${total} archivo(s)</strong> que ya figuran como descargados en el historial o existen en el disco.`;
+
+        const choice = await showReplacePrompt({
+            title: 'Archivos ya descargados',
+            message: msg,
+            files: alreadyDownloaded,
+            allowSkip: true
+        });
+
+        if (choice === 'cancel') {
+            return;
+        } else if (choice === 'overwrite') {
+            overwrite = true;
+            itemsToProcess = payloadItems;
+        } else if (choice === 'skip') {
+            overwrite = false;
+            const alreadyMsgIds = new Set(alreadyDownloaded.map(it => it.message_id));
+            const alreadyNames = new Set(alreadyDownloaded.map(it => it.filename));
+            itemsToProcess = payloadItems.filter(it => !alreadyMsgIds.has(it.message_id) && !alreadyNames.has(it.filename));
+
+            if (itemsToProcess.length === 0) {
+                showToast('Todos los archivos seleccionados ya fueron descargados previamente. Se omitió la descarga.', 'info');
+                if (removeFromGrabber) {
+                    const grabberIds = payloadItems.map(it => it.grabber_item_id).filter(Boolean);
+                    if (grabberIds.length > 0) {
+                        try {
+                            await fetch(`${API_BASE}/grabber/delete`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ item_ids: grabberIds })
+                            });
+                            await loadGrabberData();
+                        } catch (err) {}
+                    }
+                }
+                return;
+            }
+        }
+    }
+
+    if (triggerBtn) {
+        origBtnHtml = triggerBtn.innerHTML;
+        triggerBtn.disabled = true;
+        triggerBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Iniciando...';
+    }
+
+    try {
+        const res = await fetch(`${API_BASE}/download`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                items: itemsToProcess,
+                custom_dir: customDir,
+                include_date: includeDate,
+                remove_from_grabber: removeFromGrabber,
+                overwrite: overwrite
+            })
+        });
+        const data = await res.json();
+        if (data.success) {
+            itemsToProcess.forEach(it => {
+                if (it.grabber_item_id) selectedGrabberItems.delete(it.grabber_item_id);
+            });
+            switchMainTab('descargas');
+            await loadGrabberData();
+            await loadDownloadsData();
+        } else {
+            showToast('Error al iniciar descargas: ' + (data.error || 'Desconocido'), 'error');
+        }
+    } catch (e) {
+        showToast('Error de red al conectar con el servidor: ' + e.message, 'error');
+    } finally {
+        if (triggerBtn) {
+            triggerBtn.disabled = false;
+            triggerBtn.innerHTML = origBtnHtml;
+        }
+    }
+}
+
 if (btnStartGrabberDownloads) {
     btnStartGrabberDownloads.addEventListener('click', async () => {
         // Recolectar elementos a descargar
@@ -2773,39 +3338,7 @@ if (btnStartGrabberDownloads) {
             grabber_item_id: it.id
         }));
         
-        btnStartGrabberDownloads.disabled = true;
-        const origHtml = btnStartGrabberDownloads.innerHTML;
-        btnStartGrabberDownloads.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Iniciando...';
-        
-        try {
-            const res = await fetch(`${API_BASE}/download`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    items: payloadItems,
-                    custom_dir: customDir,
-                    include_date: includeDate,
-                    remove_from_grabber: true
-                })
-            });
-            const data = await res.json();
-            
-            if (data.success) {
-                // Quitar de seleccionados
-                itemsToDownload.forEach(it => selectedGrabberItems.delete(it.id));
-                // Cambiar a la pestaña de Descargas para ver el progreso en tiempo real
-                switchMainTab('descargas');
-                await loadGrabberData();
-                await loadDownloadsData();
-            } else {
-                showToast('Error al iniciar descargas: ' + (data.error || 'Desconocido'), 'error');
-            }
-        } catch (e) {
-            showToast('Error de red al conectar con el servidor: ' + e.message, 'error');
-        } finally {
-            btnStartGrabberDownloads.disabled = false;
-            btnStartGrabberDownloads.innerHTML = origHtml;
-        }
+        await startDownloadsWithOverwritePrompt(payloadItems, customDir, includeDate, true, btnStartGrabberDownloads);
     });
 }
 
@@ -2922,27 +3455,7 @@ window.handleDownloadGrabberPackage = async function(event, pkgId) {
         grabber_item_id: it.id
     }));
     
-    try {
-        const res = await fetch(`${API_BASE}/download`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                items: payloadItems,
-                custom_dir: customDir,
-                include_date: includeDate,
-                remove_from_grabber: true
-            })
-        });
-        const data = await res.json();
-        if (data.success) {
-            items.forEach(it => selectedGrabberItems.delete(it.id));
-            switchMainTab('descargas');
-            await loadGrabberData();
-            await loadDownloadsData();
-        }
-    } catch (e) {
-        showToast('Error: ' + e.message, 'error');
-    }
+    await startDownloadsWithOverwritePrompt(payloadItems, customDir, includeDate, true);
 };
 
 window.handleDeleteGrabberPackage = async function(event, pkgId) {
@@ -2990,27 +3503,7 @@ window.handleDownloadSingleGrabberItem = async function(event, itemId) {
         grabber_item_id: targetItem.id
     }];
     
-    try {
-        const res = await fetch(`${API_BASE}/download`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                items: payloadItems,
-                custom_dir: customDir,
-                include_date: includeDate,
-                remove_from_grabber: true
-            })
-        });
-        const data = await res.json();
-        if (data.success) {
-            selectedGrabberItems.delete(targetItem.id);
-            switchMainTab('descargas');
-            await loadGrabberData();
-            await loadDownloadsData();
-        }
-    } catch (e) {
-        showToast('Error: ' + e.message, 'error');
-    }
+    await startDownloadsWithOverwritePrompt(payloadItems, customDir, includeDate, true);
 };
 
 window.handleDeleteSingleGrabberItem = async function(event, itemId) {
@@ -3102,6 +3595,109 @@ if (btnStopAll) {
     });
 }
 
+window.handleToggleChannel = async function(event, chanName) {
+    if (event) event.stopPropagation();
+    const chanDownloads = downloadsData.filter(d => ((d.channel_name || '').trim() || 'Descargas Directas') === chanName);
+    if (chanDownloads.length === 0) return;
+
+    const isAnyDownloading = chanDownloads.some(d => (itemStates[d.db_id] || d.state) === 'downloading');
+    for (const dl of chanDownloads) {
+        if (isAnyDownloading) {
+            if ((itemStates[dl.db_id] || dl.state) === 'downloading') {
+                await fetch(`${API_BASE}/download/pause`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ index: dl.db_id })
+                });
+            }
+        } else {
+            const st = itemStates[dl.db_id] || dl.state;
+            if (st === 'paused') {
+                await fetch(`${API_BASE}/download/resume`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ index: dl.db_id })
+                });
+            } else if (st !== 'done') {
+                await fetch(`${API_BASE}/download`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ indices: [dl.db_id], is_resume: true })
+                });
+            }
+        }
+    }
+    connectWebSocket();
+};
+
+window.handleDeleteChannel = async function(event, chanName) {
+    if (event) event.stopPropagation();
+    if (!await showConfirmDialog(`¿Eliminar todo el canal "${chanName}" y todas sus descargas del historial?`)) return;
+    const ids = downloadsData.filter(d => ((d.channel_name || '').trim() || 'Descargas Directas') === chanName).map(d => d.db_id);
+    try {
+        await fetch(`${API_BASE}/downloads/delete`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                db_ids: ids,
+                indices: ids,
+                channel_name: chanName 
+            })
+        });
+        ids.forEach(id => {
+            selectedDownloads.delete(id);
+            delete itemStates[id];
+            delete itemFilePaths[id];
+        });
+        showToast(`"${chanName}" eliminado del historial.`, 'success');
+        await loadDownloadsData();
+    } catch (e) {
+        console.error("Error al eliminar canal:", e);
+        showToast('Error al eliminar canal.', 'error');
+    }
+};
+
+window.handleDownloadGrabberChannel = async function(event, chanName) {
+    if (event) event.stopPropagation();
+    const pkgs = grabberPackages.filter(p => ((p.channel_name || '').trim() || 'Canal Telegram') === chanName);
+    const items = [];
+    pkgs.forEach(pkg => {
+        (pkg.items || []).forEach(it => {
+            if (isFormatAllowed(it.filename)) {
+                items.push({ ...it, package_name: pkg.name, channel_name: pkg.channel_name || chanName });
+            }
+        });
+    });
+    if (items.length === 0) {
+        showToast('No hay archivos válidos para descargar en este canal.', 'info');
+        return;
+    }
+    const customDir = customDirInput ? customDirInput.value.trim() : '';
+    const includeDate = chkIncludeDate ? chkIncludeDate.checked : false;
+    const payloadItems = items.map(it => ({
+        message_id: it.message_id,
+        entity_id: it.entity_id || '',
+        filename: it.filename,
+        total_size: it.total_size,
+        fecha: it.fecha || '',
+        custom_dir: it.custom_dir || customDir,
+        package_name: it.package_name || 'Descargas',
+        channel_name: it.channel_name || '',
+        grabber_item_id: it.id
+    }));
+    await startDownloadsWithOverwritePrompt(payloadItems, customDir, includeDate, true);
+};
+
+window.handleDeleteGrabberChannel = async function(event, chanName) {
+    if (event) event.stopPropagation();
+    if (!await showConfirmDialog(`¿Eliminar todos los paquetes del canal "${chanName}" del capturador?`)) return;
+    const pkgs = grabberPackages.filter(p => ((p.channel_name || '').trim() || 'Canal Telegram') === chanName);
+    for (const pkg of pkgs) {
+        await fetch(`${API_BASE}/grabber/package/${pkg.id}`, { method: 'DELETE' });
+    }
+    await loadGrabberData();
+};
+
 window.handleTogglePackage = async function(event, pkgName) {
     if (event) event.stopPropagation();
     const pkgDownloads = downloadsData.filter(d => (d.package_name || 'Descargas') === pkgName);
@@ -3172,13 +3768,19 @@ window.handleToggleDownload = async function(event, dbId) {
         });
         connectWebSocket();
     } else {
+        let overwrite = false;
+        if (state === 'done') {
+            const confirmed = await showConfirmDialog('Este archivo ya figura como completado en el historial. ¿Deseas volver a descargarlo y reemplazar el archivo existente?');
+            if (!confirmed) return;
+            overwrite = true;
+        }
         itemStates[dbId] = 'pending';
         updateDownloadRowUI(dbId, 'pending');
         connectWebSocket();
         await fetch(`${API_BASE}/download`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ indices: [dbId], is_resume: true })
+            body: JSON.stringify({ indices: [dbId], is_resume: true, overwrite: overwrite })
         });
     }
 };
@@ -3269,8 +3871,24 @@ function updateDownloadRowUI(dbId, state) {
     }
 }
 
-// Actualiza el progreso agregado y estado de la fila del paquete padre en Descargas
+// Actualiza el progreso agregado y estado de la fila del paquete padre en Descargas con throttling
+const _pendingPkgRowUpdates = new Set();
+let _pkgRowUpdateTimer = null;
+
 function updatePackageRowUI(pkgName) {
+    if (!pkgName) return;
+    _pendingPkgRowUpdates.add(pkgName);
+    if (!_pkgRowUpdateTimer) {
+        _pkgRowUpdateTimer = setTimeout(() => {
+            _pkgRowUpdateTimer = null;
+            const toUpdate = Array.from(_pendingPkgRowUpdates);
+            _pendingPkgRowUpdates.clear();
+            toUpdate.forEach(p => _doUpdatePackageRowUI(p));
+        }, 250);
+    }
+}
+
+function _doUpdatePackageRowUI(pkgName) {
     if (!pkgName) return;
     const items = downloadsData.filter(d => (d.package_name || 'Descargas') === pkgName);
     if (items.length === 0) return;
@@ -3295,10 +3913,13 @@ function updatePackageRowUI(pkgName) {
     });
     
     const percent = totalSize > 0 ? ((downloadedBytes / totalSize) * 100).toFixed(1) : 0;
-    const pkgCompEl = document.getElementById(`pkg-comp-${encodeURIComponent(pkgName)}`);
-    const pkgFillEl = document.getElementById(`pkg-perc-fill-${encodeURIComponent(pkgName)}`);
-    const pkgTextEl = document.getElementById(`pkg-perc-text-${encodeURIComponent(pkgName)}`);
-    const pkgSpdEl = document.getElementById(`pkg-spd-${encodeURIComponent(pkgName)}`);
+    const chanName = (items[0]?.channel_name || '').trim() || 'Descargas Directas';
+    const pkgKey = `${chanName}:::${pkgName}`;
+
+    const pkgCompEl = document.getElementById(`pkg-comp-${encodeURIComponent(pkgKey)}`) || document.getElementById(`pkg-comp-${encodeURIComponent(pkgName)}`);
+    const pkgFillEl = document.getElementById(`pkg-perc-fill-${encodeURIComponent(pkgKey)}`) || document.getElementById(`pkg-perc-fill-${encodeURIComponent(pkgName)}`);
+    const pkgTextEl = document.getElementById(`pkg-perc-text-${encodeURIComponent(pkgKey)}`) || document.getElementById(`pkg-perc-text-${encodeURIComponent(pkgName)}`);
+    const pkgSpdEl = document.getElementById(`pkg-spd-${encodeURIComponent(pkgKey)}`) || document.getElementById(`pkg-spd-${encodeURIComponent(pkgName)}`);
     
     if (pkgCompEl) pkgCompEl.textContent = formatBytes(downloadedBytes);
     if (pkgFillEl) {
@@ -3323,6 +3944,83 @@ function updatePackageRowUI(pkgName) {
         } else {
             pkgSpdEl.textContent = 'En cola';
             pkgSpdEl.style.color = '#666';
+        }
+    }
+    if (chanName) {
+        updateChannelRowUI(chanName);
+    }
+}
+
+// Actualiza el progreso agregado y estado de la fila del Canal en Descargas con throttling
+const _pendingChanRowUpdates = new Set();
+let _chanRowUpdateTimer = null;
+
+function updateChannelRowUI(chanName) {
+    if (!chanName) return;
+    _pendingChanRowUpdates.add(chanName);
+    if (!_chanRowUpdateTimer) {
+        _chanRowUpdateTimer = setTimeout(() => {
+            _chanRowUpdateTimer = null;
+            const toUpdate = Array.from(_pendingChanRowUpdates);
+            _pendingChanRowUpdates.clear();
+            toUpdate.forEach(c => _doUpdateChannelRowUI(c));
+        }, 250);
+    }
+}
+
+function _doUpdateChannelRowUI(chanName) {
+    if (!chanName) return;
+    const items = downloadsData.filter(d => ((d.channel_name || '').trim() || 'Descargas Directas') === chanName);
+    if (items.length === 0) return;
+
+    let totalSize = 0;
+    let downloadedBytes = 0;
+    let activeDownloading = 0;
+    let hasPaused = false;
+    let hasStopped = false;
+    let allDone = true;
+
+    items.forEach(it => {
+        totalSize += (it.tamanio || 0);
+        const downloaded = itemProgress[it.db_id] !== undefined ? itemProgress[it.db_id] : (it.downloaded_bytes || 0);
+        downloadedBytes += downloaded;
+
+        const st = itemStates[it.db_id] || it.state;
+        if (st === 'downloading') activeDownloading++;
+        if (st === 'paused') hasPaused = true;
+        if (st === 'stopped') hasStopped = true;
+        if (st !== 'done') allDone = false;
+    });
+
+    const percent = totalSize > 0 ? ((downloadedBytes / totalSize) * 100).toFixed(1) : 0;
+    const chanCompEl = document.getElementById(`chan-comp-${encodeURIComponent(chanName)}`);
+    const chanFillEl = document.getElementById(`chan-perc-fill-${encodeURIComponent(chanName)}`);
+    const chanTextEl = document.getElementById(`chan-perc-text-${encodeURIComponent(chanName)}`);
+    const chanSpdEl = document.getElementById(`chan-spd-${encodeURIComponent(chanName)}`);
+
+    if (chanCompEl) chanCompEl.textContent = formatBytes(downloadedBytes);
+    if (chanFillEl) {
+        chanFillEl.style.width = `${percent}%`;
+        chanFillEl.style.backgroundColor = allDone ? '#107c10' : '#0078d7';
+    }
+    if (chanTextEl) chanTextEl.textContent = `${percent}%`;
+
+    if (chanSpdEl) {
+        if (allDone) {
+            chanSpdEl.textContent = 'Completado';
+            chanSpdEl.style.color = '#107c10';
+        } else if (activeDownloading > 0) {
+            chanSpdEl.textContent = `Descargando (${activeDownloading})`;
+            chanSpdEl.style.color = '#0078d7';
+        } else if (hasPaused) {
+            chanSpdEl.textContent = 'Pausado';
+            chanSpdEl.style.color = '#d97706';
+        } else if (hasStopped) {
+            chanSpdEl.textContent = 'Detenido';
+            chanSpdEl.style.color = '#d92d20';
+        } else {
+            chanSpdEl.textContent = 'En cola';
+            chanSpdEl.style.color = '#666';
         }
     }
 }
@@ -3355,6 +4053,9 @@ function connectWebSocket() {
     
     ws.onmessage = (event) => {
         lastWsMessageTime = Date.now();
+        if (typeof event.data === 'string' && (event.data === 'pong' || event.data === 'ping')) {
+            return;
+        }
         try {
             const data = JSON.parse(event.data);
             
@@ -3381,6 +4082,7 @@ function connectWebSocket() {
                 itemStates[dbId] = 'downloading';
                 updateDownloadRowUI(dbId, 'downloading');
                 if (data.package_name) updatePackageRowUI(data.package_name);
+                if (data.channel_name) updateChannelRowUI(data.channel_name);
                 updateDescargasBadges();
                 
                 const infoDescargasText = document.getElementById('infoDescargasText');
@@ -3414,12 +4116,16 @@ function connectWebSocket() {
                 if (data.package_name) {
                     updatePackageRowUI(data.package_name);
                 }
+                if (data.channel_name) {
+                    updateChannelRowUI(data.channel_name);
+                }
             } else if (data.type === 'status_change') {
                 const dbId = data.db_id || data.index;
                 itemStates[dbId] = data.state;
                 if (data.file_path) itemFilePaths[dbId] = data.file_path;
                 updateDownloadRowUI(dbId, data.state);
                 if (data.package_name) updatePackageRowUI(data.package_name);
+                if (data.channel_name) updateChannelRowUI(data.channel_name);
                 updateDescargasBadges();
             } else if (data.type === 'done') {
                 const dbId = data.db_id || data.index;
@@ -3438,6 +4144,7 @@ function connectWebSocket() {
                 
                 updateDownloadRowUI(dbId, 'done');
                 if (data.package_name) updatePackageRowUI(data.package_name);
+                if (data.channel_name) updateChannelRowUI(data.channel_name);
                 updateDescargasBadges();
             } else if (data.type === 'history_update' || data.type === 'downloads_update') {
                 loadDownloadsData();
@@ -3728,6 +4435,35 @@ async function addAutoChannel() {
         const subfolderSelect = document.getElementById('autoChannelSubfolderMode');
         const subfolderMode = subfolderSelect ? subfolderSelect.value : 'channel_model';
 
+        let overwrite = false;
+        if (downloadExisting) {
+            try {
+                const checkRes = await fetch(`${API_BASE}/downloads/check_existing`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        channel_url: url,
+                        custom_dir: dirInput.value.trim()
+                    })
+                });
+                const checkData = await checkRes.json();
+                if (checkData.success && checkData.channel_completed_count > 0) {
+                    const cName = checkData.channel_name || url;
+                    const choice = await showReplacePrompt({
+                        title: 'Historial de descargas detectado',
+                        message: `El canal <strong>${escapeHtml(cName)}</strong> ya cuenta con <strong>${checkData.channel_completed_count} archivo(s)</strong> registrados como descargados en el historial.<br><br>¿Deseas volver a descargarlos y reemplazar los archivos existentes, u omitir los ya descargados y procesar únicamente archivos nuevos?`,
+                        allowSkip: true
+                    });
+                    if (choice === 'cancel') {
+                        return;
+                    }
+                    overwrite = (choice === 'overwrite');
+                }
+            } catch (err) {
+                console.warn("No se pudo verificar el historial del canal:", err);
+            }
+        }
+
         const res = await fetch(`${API_BASE}/autochannels/add`, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
@@ -3736,7 +4472,8 @@ async function addAutoChannel() {
                 custom_dir: dirInput.value.trim(),
                 download_existing: downloadExisting,
                 file_types: fileTypesStr,
-                subfolder_mode: subfolderMode
+                subfolder_mode: subfolderMode,
+                overwrite: overwrite
             })
         });
         const data = await res.json();
@@ -3897,6 +4634,231 @@ if (btnSelectAutoDir) {
 
 // Inicializar texto de formatos para auto-canal
 updateAutoChannelFormatsSummaryUI();
+
+
+// ─── Modal de Configuración Global ───────────────
+const btnOpenSettings = document.getElementById('btnOpenSettings');
+const settingsModal = document.getElementById('settingsModal');
+const btnCloseSettingsModal = document.getElementById('btnCloseSettingsModal');
+const btnCancelSettings = document.getElementById('btnCancelSettings');
+const btnSaveSettings = document.getElementById('btnSaveSettings');
+const btnTestWebhook = document.getElementById('btnTestWebhook');
+const settingMaxConcurrent = document.getElementById('settingMaxConcurrent');
+const lblMaxConcurrentVal = document.getElementById('lblMaxConcurrentVal');
+const settingDownloadTimeout = document.getElementById('settingDownloadTimeout');
+const settingMaxBandwidth = document.getElementById('settingMaxBandwidth');
+const settingMaxAutoRetries = document.getElementById('settingMaxAutoRetries');
+const settingWebhookUrl = document.getElementById('settingWebhookUrl');
+
+// Elementos de Conexión con App Android
+const txtServerIpUrl = document.getElementById('txtServerIpUrl');
+const btnCopyServerIp = document.getElementById('btnCopyServerIp');
+const lblCopyText = document.getElementById('lblCopyText');
+const btnToggleQrCode = document.getElementById('btnToggleQrCode');
+const containerQrAndroid = document.getElementById('containerQrAndroid');
+const qrCodeAndroid = document.getElementById('qrCodeAndroid');
+const lblServerPort = document.getElementById('lblServerPort');
+const extraIpsContainer = document.getElementById('extraIpsContainer');
+const lblExtraIps = document.getElementById('lblExtraIps');
+
+if (settingMaxConcurrent && lblMaxConcurrentVal) {
+    settingMaxConcurrent.addEventListener('input', () => {
+        lblMaxConcurrentVal.textContent = settingMaxConcurrent.value;
+    });
+}
+
+function openSettingsModal() {
+    fetch('/api/settings')
+        .then(res => res.json())
+        .then(data => {
+            // Cargar datos de red para App Android
+            const port = data.port || window.location.port || '8000';
+            if (lblServerPort) lblServerPort.textContent = port;
+
+            let targetUrl = data.primary_url;
+            if (!targetUrl || targetUrl.includes('127.0.0.1') || targetUrl.includes('localhost')) {
+                if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+                    targetUrl = window.location.protocol + '//' + window.location.host;
+                } else if (data.local_ips && data.local_ips.length > 0) {
+                    targetUrl = 'http://' + data.local_ips[0] + ':' + port;
+                }
+            }
+            if (txtServerIpUrl) txtServerIpUrl.value = targetUrl || ('http://' + window.location.host);
+
+            // Generar código QR de conexión de inmediato
+            if (qrCodeAndroid && typeof QRCode !== 'undefined') {
+                qrCodeAndroid.innerHTML = '';
+                const urlParaQr = txtServerIpUrl ? txtServerIpUrl.value : ('http://' + window.location.host);
+                try {
+                    new QRCode(qrCodeAndroid, {
+                        text: urlParaQr,
+                        width: 108,
+                        height: 108,
+                        colorDark: "#0f172a",
+                        colorLight: "#ffffff",
+                        correctLevel: QRCode.CorrectLevel.M
+                    });
+                } catch (e) {
+                    console.error("Error generando QR Android:", e);
+                }
+            }
+
+            if (data.local_ips && data.local_ips.length > 1 && extraIpsContainer && lblExtraIps) {
+                extraIpsContainer.style.display = 'block';
+                lblExtraIps.textContent = data.local_ips.slice(1).map(ip => `http://${ip}:${port}`).join(', ');
+            } else if (extraIpsContainer) {
+                extraIpsContainer.style.display = 'none';
+            }
+
+            if (settingMaxConcurrent) {
+                settingMaxConcurrent.value = data.max_concurrent_downloads || 2;
+                if (lblMaxConcurrentVal) lblMaxConcurrentVal.textContent = settingMaxConcurrent.value;
+            }
+            if (settingDownloadTimeout) {
+                settingDownloadTimeout.value = data.download_timeout || 60;
+            }
+            if (settingMaxBandwidth) {
+                settingMaxBandwidth.value = data.max_bandwidth_mbps !== undefined ? data.max_bandwidth_mbps : 0;
+            }
+            if (settingMaxAutoRetries) {
+                settingMaxAutoRetries.value = data.max_auto_retries !== undefined ? data.max_auto_retries : 2;
+            }
+            if (settingWebhookUrl) {
+                settingWebhookUrl.value = data.webhook_url || '';
+            }
+            if (settingsModal) settingsModal.style.display = 'flex';
+        })
+        .catch(err => {
+            console.error("Error cargando configuración:", err);
+            showToast("No se pudo cargar la configuración del servidor.", "error");
+        });
+}
+
+function closeSettingsModal() {
+    if (settingsModal) settingsModal.style.display = 'none';
+    if (containerQrAndroid) containerQrAndroid.style.display = 'none';
+}
+
+if (btnCopyServerIp && txtServerIpUrl) {
+    btnCopyServerIp.addEventListener('click', () => {
+        const text = txtServerIpUrl.value;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(() => {
+                if (lblCopyText) lblCopyText.textContent = "¡Copiado!";
+                setTimeout(() => { if (lblCopyText) lblCopyText.textContent = "Copiar"; }, 2000);
+                showToast("Dirección copiada para la app de Android", "success", 2000, "App Android");
+            }).catch(() => fallbackCopy(text));
+        } else {
+            fallbackCopy(text);
+        }
+    });
+}
+
+function fallbackCopy(text) {
+    if (txtServerIpUrl) {
+        txtServerIpUrl.select();
+        document.execCommand('copy');
+        if (lblCopyText) lblCopyText.textContent = "¡Copiado!";
+        setTimeout(() => { if (lblCopyText) lblCopyText.textContent = "Copiar"; }, 2000);
+        showToast("Dirección copiada para la app de Android", "success", 2000, "App Android");
+    }
+}
+
+if (btnToggleQrCode && containerQrAndroid) {
+    btnToggleQrCode.addEventListener('click', () => {
+        const isHidden = containerQrAndroid.style.display === 'none';
+        if (isHidden) {
+            containerQrAndroid.style.display = 'block';
+            if (qrCodeAndroid && typeof QRCode !== 'undefined') {
+                qrCodeAndroid.innerHTML = '';
+                const url = txtServerIpUrl ? txtServerIpUrl.value : window.location.origin;
+                try {
+                    new QRCode(qrCodeAndroid, {
+                        text: url,
+                        width: 140,
+                        height: 140,
+                        colorDark: "#0f172a",
+                        colorLight: "#ffffff",
+                        correctLevel: QRCode.CorrectLevel.M
+                    });
+                } catch (e) {
+                    console.error("Error generando QR:", e);
+                }
+            }
+        } else {
+            containerQrAndroid.style.display = 'none';
+        }
+    });
+}
+
+if (btnOpenSettings) btnOpenSettings.addEventListener('click', openSettingsModal);
+if (btnCloseSettingsModal) btnCloseSettingsModal.addEventListener('click', closeSettingsModal);
+if (btnCancelSettings) btnCancelSettings.addEventListener('click', closeSettingsModal);
+
+if (btnTestWebhook) {
+    btnTestWebhook.addEventListener('click', () => {
+        const url = settingWebhookUrl ? settingWebhookUrl.value.trim() : '';
+        if (!url) {
+            showToast("Ingresa una URL de Webhook para realizar la prueba.", "error");
+            return;
+        }
+        btnTestWebhook.disabled = true;
+        fetch('/api/settings/test_webhook', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ webhook_url: url })
+        })
+        .then(res => res.json())
+        .then(data => {
+            btnTestWebhook.disabled = false;
+            if (data.success) {
+                showToast(data.message || "Notificación de prueba enviada.", "success", 4000, "Webhook");
+            } else {
+                showToast(data.error || "No se pudo enviar el Webhook de prueba.", "error");
+            }
+        })
+        .catch(err => {
+            btnTestWebhook.disabled = false;
+            showToast("Error al conectar con el servidor.", "error");
+        });
+    });
+}
+
+if (btnSaveSettings) {
+    btnSaveSettings.addEventListener('click', () => {
+        const maxConcurrent = parseInt(settingMaxConcurrent ? settingMaxConcurrent.value : 2, 10);
+        const timeout = parseInt(settingDownloadTimeout ? settingDownloadTimeout.value : 60, 10);
+        const maxBandwidth = parseFloat(settingMaxBandwidth ? settingMaxBandwidth.value : 0);
+        const maxRetries = parseInt(settingMaxAutoRetries ? settingMaxAutoRetries.value : 2, 10);
+        const webhookUrl = settingWebhookUrl ? settingWebhookUrl.value.trim() : '';
+
+        fetch('/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                max_concurrent_downloads: maxConcurrent,
+                download_timeout: timeout,
+                max_bandwidth_mbps: maxBandwidth,
+                max_auto_retries: maxRetries,
+                webhook_url: webhookUrl
+            })
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                showToast("Configuración guardada correctamente.", "success", 4000, "Configuración");
+                closeSettingsModal();
+            } else {
+                showToast(data.error || "Error al guardar configuración.", "error");
+            }
+        })
+        .catch(err => {
+            console.error("Error guardando configuración:", err);
+            showToast("No se pudieron guardar los cambios.", "error");
+        });
+    });
+}
+
 
 
 

@@ -1,8 +1,10 @@
 import asyncio
 import time
+import socket
 import re
 import sys
 import os
+import shutil
 import subprocess
 import logging
 from datetime import datetime, timezone, time as dt_time
@@ -73,8 +75,19 @@ client = TelegramClient(
 
 # Almacenar los videos escaneados temporalmente en memoria para poder descargarlos
 current_videos_cache = []
-# Caché de mensajes de Telethon indexados por (str(entity_id), message_id)
+# Caché de mensajes de Telethon indexados por (str(entity_id), message_id) con límite de tamaño para evitar saturar RAM en NAS
 messages_cache = {}
+
+def cache_message(entity_id, msg_id, msg):
+    """Guarda un mensaje en la caché en memoria limitando el tamaño máximo para evitar saturar la RAM."""
+    key = (str(entity_id), int(msg_id))
+    if len(messages_cache) >= 500 and key not in messages_cache:
+        try:
+            oldest_key = next(iter(messages_cache))
+            del messages_cache[oldest_key]
+        except Exception:
+            pass
+    messages_cache[key] = msg
 
 # Websocket manager para enviar el progreso
 class ConnectionManager:
@@ -321,7 +334,7 @@ async def auto_download_listener(event):
         return
 
     # Guardar en memoria caché para acceso inmediato de descarga
-    messages_cache[(str(matched_chan['entity_id']), msg.id)] = msg
+    cache_message(matched_chan['entity_id'], msg.id, msg)
 
     channel_name = matched_chan.get('channel_name') or "Auto-Descargas"
     sub_mode = matched_chan.get('subfolder_mode') or 'channel_model'
@@ -366,10 +379,11 @@ def setup_auto_download_listener(tg_client):
     logger.info("Listener de auto-descargas registrado en el cliente Telegram.")
 
 
-async def scan_and_enqueue_channel(entity, matched_chan, limit=200, only_new=True, download_all_existing=False, since_time=None):
+async def scan_and_enqueue_channel(entity, matched_chan, limit=200, only_new=True, download_all_existing=False, since_time=None, overwrite=False):
     """
     Escanea un canal y encola para descarga los archivos multimedia que aún no se hayan descargado.
     Agrupa los archivos en paquetes lógicos por modelo/publicación igual que el Capturador de Enlaces.
+    Si overwrite es True, vuelve a descargar y reemplaza los archivos que ya existían en el historial.
     """
     try:
         new_db_ids = []
@@ -418,10 +432,19 @@ async def scan_and_enqueue_channel(entity, matched_chan, limit=200, only_new=Tru
 
         highest_seen_id = last_msg_id
         raw_messages = []
+        if overwrite:
+            existing_msg_ids = set()
+        else:
+            existing_msg_ids = database.get_completed_message_ids_for_entity(entity_id) if download_all_existing else database.get_existing_message_ids_for_entity(entity_id)
 
+        msg_count = 0
         async for msg in client.iter_messages(entity, **iter_kwargs):
             if not msg:
                 continue
+
+            msg_count += 1
+            if msg_count % 100 == 0:
+                await asyncio.sleep(0)  # Ceder el hilo para no congelar uvicorn ni la interfaz web
 
             # Si min_id está activo y encontramos un mensaje menor o igual, detener
             if only_new and last_msg_id > 0 and msg.id <= last_msg_id:
@@ -466,10 +489,12 @@ async def scan_and_enqueue_channel(entity, matched_chan, limit=200, only_new=Tru
         videos = []
         file_types = matched_chan.get('file_types', 'all') or 'all'
 
-        for message in raw_messages:
-            # Verificar si ya existe en la base de datos
-            existente = database.get_download_by_message(message.id, entity_id)
-            if existente:
+        for idx, message in enumerate(raw_messages):
+            if idx % 100 == 0:
+                await asyncio.sleep(0)
+
+            # Verificar si ya existe en la base de datos de forma instantánea en memoria O(1)
+            if message.id in existing_msg_ids:
                 continue
 
             parent_fn = None
@@ -516,32 +541,34 @@ async def scan_and_enqueue_channel(entity, matched_chan, limit=200, only_new=Tru
                 "grouped_id": gid
             })
 
-        # Cachear los objetos message de telethon
-        for v in videos:
-            messages_cache[(str(entity_id), v["id"])] = v["message"]
+        # Cachear solo los primeros mensajes en memoria para no saturar RAM en NAS
+        for v in videos[:200]:
+            cache_message(entity_id, v["id"], v["message"])
 
         # Agrupar inteligentemente en paquetes por modelo/publicación
         package_list = group_items_into_packages(videos, channel_name, custom_dir, str(entity_id))
 
-        # Registrar descargas organizadas por paquete
+        # Registrar descargas organizadas por paquete usando inserción atómica en lote
         sub_mode = matched_chan.get('subfolder_mode') or 'channel_model'
+        items_to_insert = []
         for pkg in package_list:
             pkg_name = pkg["name"] if sub_mode == 'channel_model' else channel_name
             for it in pkg["items"]:
-                db_id = database.add_download(
-                    message_id=it["id"],
-                    entity_id=str(entity_id),
-                    filename=it["nombre"],
-                    total_size=it["tamanio"],
-                    custom_dir=custom_dir,
-                    file_path="",
-                    package_name=pkg_name,
-                    channel_name=channel_name,
-                    fecha=it.get("fecha", "")
-                )
-                new_db_ids.append(db_id)
+                items_to_insert.append({
+                    "message_id": it["id"],
+                    "entity_id": str(entity_id),
+                    "filename": it["nombre"],
+                    "total_size": it["tamanio"],
+                    "custom_dir": custom_dir,
+                    "file_path": "",
+                    "package_name": pkg_name,
+                    "channel_name": channel_name,
+                    "fecha": it.get("fecha", "")
+                })
 
-        # Actualizar last_message_id del canal
+        new_db_ids = database.add_downloads_batch(items_to_insert, overwrite=overwrite)
+
+        # Actualizar last_message_id del canal inmediatamente
         if channel_db_id:
             if highest_seen_id > last_msg_id:
                 database.update_auto_channel_last_message(channel_db_id, highest_seen_id)
@@ -558,8 +585,8 @@ async def scan_and_enqueue_channel(entity, matched_chan, limit=200, only_new=Tru
             if only_new:
                 _pending_auto_downloads.update(new_db_ids)
                 _auto_download_total_queued += len(new_db_ids)
-            logger.info(f"[Auto-Descargas] Encolados {len(new_db_ids)} archivos nuevos para el canal '{channel_name}' en {len(package_list)} paquete(s)")
-            asyncio.create_task(process_downloads(new_db_ids, custom_dir))
+            logger.info(f"[Auto-Descargas] Encolados {len(new_db_ids)} archivos para el canal '{channel_name}' en {len(package_list)} paquete(s) (overwrite={overwrite})")
+            asyncio.create_task(process_downloads(new_db_ids, custom_dir, overwrite=overwrite))
             await manager.send_json({"type": "history_update"})
 
         return len(new_db_ids)
@@ -962,9 +989,10 @@ def group_items_into_packages(videos: list[dict], chat_name: str, custom_dir: st
         if not pkg_name or re.match(r'^(foto|preview|archivo|image)_\d+$', pkg_name, re.I):
             pkg_name = chat_name
 
-        # Asignar la carpeta al item para compatibilidad
+        # Asignar la carpeta y canal al item para compatibilidad
         for it in group_items:
             it["carpeta"] = pkg_name
+            it["channel_name"] = chat_name
 
         package_list.append({
             "name": pkg_name,
@@ -1003,6 +1031,12 @@ class DownloadRequest(BaseModel):
     is_resume: bool = False
     include_date: bool = False
     remove_from_grabber: bool = True
+    overwrite: bool = False
+
+class CheckExistingRequest(BaseModel):
+    items: list[DownloadItemPayload] = []
+    channel_url: str = ""
+    custom_dir: str = ""
 
 class DownloadControlRequest(BaseModel):
     index: int | str = "all"
@@ -1021,7 +1055,11 @@ class GrabberRenameRequest(BaseModel):
 
 class DeleteDownloadsRequest(BaseModel):
     db_ids: list[int] = []
+    indices: list[int] = []
+    index: int | None = None
     package_names: list[str] = []
+    channel_name: str | None = None
+    channel_names: list[str] = []
 
 class DownloadItem:
     def __init__(self, original_idx: int, filename: str, total_size: int, package_name: str = "Descargas", fecha: str = "", channel_name: str = ""):
@@ -1041,6 +1079,8 @@ class DownloadItem:
         self.message_id = None
         self.entity_id = None
         self.custom_dir = ""
+        self.overwrite = False
+        self.retries_count = 0
 
 
 class DownloadManager:
@@ -1049,9 +1089,20 @@ class DownloadManager:
         self.global_pause_event = asyncio.Event()
         self.global_pause_event.set()
         self.global_cancelled = False
-        self.active_index: int | None = None
+        self.active_indices: set[int] = set()
         self.is_running = False
         self.queue: list[int] = []
+
+    @property
+    def active_index(self) -> int | None:
+        return next(iter(self.active_indices), None)
+
+    @active_index.setter
+    def active_index(self, val: int | None):
+        if val is None:
+            self.active_indices.clear()
+        else:
+            self.active_indices.add(val)
 
     def setup(self, indices: list[int], videos_cache: list):
         self.global_pause_event = asyncio.Event()
@@ -1073,7 +1124,7 @@ class DownloadManager:
             self.items[idx].cancelled = False
             self.items[idx].pause_event.set()
             if self.items[idx].state == "paused":
-                self.items[idx].state = "downloading" if idx == self.active_index else "pending"
+                self.items[idx].state = "downloading" if idx in self.active_indices else "pending"
 
     def stop_item(self, idx: int):
         if idx in self.items:
@@ -1094,7 +1145,7 @@ class DownloadManager:
             item.cancelled = False
             item.pause_event.set()
             if item.state == "paused":
-                item.state = "downloading" if item.original_idx == self.active_index else "pending"
+                item.state = "downloading" if item.original_idx in self.active_indices else "pending"
 
     def stop_all(self):
         self.global_cancelled = True
@@ -1105,6 +1156,7 @@ class DownloadManager:
             item.pause_event.set()
             if item.state in ("downloading", "pending", "paused"):
                 item.state = "stopped"
+        self.active_indices.clear()
         self.is_running = False
 
 download_mgr = DownloadManager()
@@ -1213,8 +1265,8 @@ async def get_history():
             "fecha": h.get("fecha") or "",
             "custom_dir": h.get("custom_dir") or ""
         })
-        # Registrar en el DownloadManager si no existe
-        if h["id"] not in download_mgr.items:
+        # Registrar en el DownloadManager solo los elementos activos o pendientes en cola
+        if h["state"] in ('downloading', 'pending') and h["id"] not in download_mgr.items:
             item = DownloadItem(h["id"], h["filename"], h["total_size"], pkg_name, h.get("fecha") or "", channel_name)
             item.db_id = h["id"]
             item.state = h["state"]
@@ -1228,13 +1280,42 @@ async def get_history():
 
 @app.post("/api/downloads/delete")
 async def delete_downloads(data: DeleteDownloadsRequest):
-    if data.db_ids:
-        for db_id in data.db_ids:
-            if db_id in download_mgr.items:
-                download_mgr.items[db_id].cancelled = True
-                download_mgr.items[db_id].pause_event.set()
-                download_mgr.items.pop(db_id, None)
-        database.delete_downloads_batch(data.db_ids)
+    # Recoger todos los IDs explícitos (admitiendo db_ids, indices o index singular)
+    all_db_ids = set(data.db_ids)
+    if data.indices:
+        all_db_ids.update(data.indices)
+    if data.index is not None:
+        all_db_ids.add(data.index)
+
+    # Cancelar y remover items en memoria
+    for db_id in all_db_ids:
+        if db_id in download_mgr.items:
+            download_mgr.items[db_id].cancelled = True
+            download_mgr.items[db_id].pause_event.set()
+            download_mgr.items.pop(db_id, None)
+
+    if all_db_ids:
+        for db_id in all_db_ids:
+            try:
+                dl_row = database.get_download(db_id)
+                if dl_row:
+                    canal_clean = re.sub(r'[<>:"/\\|?*]', '', dl_row.get('channel_name') or "").strip()
+                    pkg_clean = re.sub(r'[<>:"/\\|?*]', '', dl_row.get('package_name') or "Descargas").strip()
+                    dest_base = dl_row.get('custom_dir') or DOWNLOAD_DIR
+                    nombre_f = dl_row.get('filename') or ""
+                    for p_tdl in [
+                        Path(dest_base) / canal_clean / pkg_clean / f"{nombre_f}.tdl",
+                        Path(dest_base) / canal_clean / f"{nombre_f}.tdl",
+                        Path(dest_base) / pkg_clean / f"{nombre_f}.tdl",
+                        Path(dest_base) / f"{nombre_f}.tdl",
+                    ]:
+                        if p_tdl.exists():
+                            p_tdl.unlink(missing_ok=True)
+            except Exception as e_del:
+                logger.warning(f"Error limpiando archivo temporal para #{db_id}: {e_del}")
+
+        database.delete_downloads_batch(list(all_db_ids))
+
     if data.package_names:
         for pkg in data.package_names:
             to_remove = [k for k, v in download_mgr.items.items() if getattr(v, 'package_name', '') == pkg]
@@ -1242,7 +1323,37 @@ async def delete_downloads(data: DeleteDownloadsRequest):
                 download_mgr.items[k].cancelled = True
                 download_mgr.items[k].pause_event.set()
                 download_mgr.items.pop(k, None)
+
+            try:
+                pkg_clean = re.sub(r'[<>:"/\\|?*]', '', pkg).strip()
+                for p_tdl in Path(DOWNLOAD_DIR).glob(f"**/{pkg_clean}/*.tdl"):
+                    p_tdl.unlink(missing_ok=True)
+            except Exception:
+                pass
+
             database.delete_package_downloads(pkg)
+
+    chans = list(data.channel_names)
+    if data.channel_name:
+        chans.append(data.channel_name)
+    if chans:
+        for ch in chans:
+            to_remove = [k for k, v in download_mgr.items.items() if (getattr(v, 'channel_name', '') or 'Descargas Directas') == ch]
+            for k in to_remove:
+                download_mgr.items[k].cancelled = True
+                download_mgr.items[k].pause_event.set()
+                download_mgr.items.pop(k, None)
+
+            try:
+                ch_clean = re.sub(r'[<>:"/\\|?*]', '', ch).strip()
+                for p_tdl in Path(DOWNLOAD_DIR).glob(f"{ch_clean}/**/*.tdl"):
+                    p_tdl.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+            database.delete_channel_downloads(ch)
+
+    await manager.send_json({"type": "history_update"})
     return {"success": True}
 
 @app.post("/api/downloads/clear_completed")
@@ -1252,6 +1363,101 @@ async def clear_completed_downloads():
         download_mgr.items.pop(k, None)
     database.clear_completed_downloads()
     return {"success": True}
+
+
+def check_file_exists_on_disk(filename, custom_dir="", package_name="", channel_name=""):
+    dest_root = Path(custom_dir.strip() if custom_dir and custom_dir.strip() else DOWNLOAD_DIR)
+    
+    candidates = [
+        dest_root / filename,
+    ]
+    if channel_name and package_name and channel_name.lower() != package_name.lower() and package_name.lower() != "descargas":
+        candidates.append(dest_root / channel_name / package_name / filename)
+    if channel_name:
+        candidates.append(dest_root / channel_name / filename)
+    if package_name and package_name.lower() != "descargas":
+        candidates.append(dest_root / package_name / filename)
+
+    for p in candidates:
+        try:
+            if p.is_file() and p.stat().st_size > 0:
+                return str(p.resolve()), p.stat().st_size
+        except Exception:
+            pass
+    return None, 0
+
+
+@app.post("/api/downloads/check_existing")
+async def check_existing_downloads_api(req: CheckExistingRequest):
+    """
+    Comprueba qué archivos de la solicitud ya figuran en el historial de descargas ('done')
+    o ya existen en el sistema de archivos en la carpeta de destino.
+    También soporta verificar si un canal de Telegram tiene descargas previas completadas.
+    """
+    try:
+        already_downloaded = []
+        seen = set()
+
+        if req.items:
+            items_dict = [it.dict() for it in req.items]
+            history_done = database.check_items_in_history(items_dict)
+            for it in history_done:
+                key = (it["message_id"], it["filename"])
+                if key not in seen:
+                    already_downloaded.append(it)
+                    seen.add(key)
+
+            for itm in req.items:
+                key = (itm.message_id, itm.filename)
+                if key in seen:
+                    continue
+                target_dir = itm.custom_dir.strip() or req.custom_dir.strip()
+                disk_path, disk_sz = check_file_exists_on_disk(
+                    itm.filename,
+                    custom_dir=target_dir,
+                    package_name=itm.package_name,
+                    channel_name=getattr(itm, "channel_name", "")
+                )
+                if disk_path:
+                    already_downloaded.append({
+                        "message_id": itm.message_id,
+                        "entity_id": itm.entity_id,
+                        "filename": itm.filename,
+                        "total_size": itm.total_size or disk_sz,
+                        "file_path": disk_path,
+                        "custom_dir": target_dir,
+                        "package_name": itm.package_name,
+                        "channel_name": getattr(itm, "channel_name", ""),
+                        "grabber_item_id": itm.grabber_item_id,
+                        "db_id": None
+                    })
+                    seen.add(key)
+
+        channel_completed_count = 0
+        channel_name = ""
+        if req.channel_url:
+            try:
+                await ensure_connected()
+                entity = await resolve_telegram_entity(client, req.channel_url)
+                channel_name = getattr(entity, 'title', '') or getattr(entity, 'username', '') or req.channel_url
+                entity_id = str(entity.id)
+                completed_ids = database.get_completed_message_ids_for_entity(entity_id)
+                channel_completed_count = len(completed_ids)
+            except Exception as e:
+                logger.warning(f"Error comprobando historial para canal {req.channel_url}: {e}")
+
+        return {
+            "success": True,
+            "exists": len(already_downloaded) > 0 or channel_completed_count > 0,
+            "count": len(already_downloaded),
+            "total": len(req.items),
+            "already_downloaded": already_downloaded,
+            "channel_completed_count": channel_completed_count,
+            "channel_name": channel_name
+        }
+    except Exception as e:
+        logger.error(f"Error en check_existing_downloads_api: {e}")
+        return {"success": False, "error": str(e), "exists": False, "count": 0, "already_downloaded": []}
 
 # --- Rutas del Capturador de Enlaces (Link Grabber) ---
 @app.get("/api/grabber")
@@ -1593,33 +1799,220 @@ async def auth_qr_cancel():
     qr_login_mgr.cancel()
     return {"success": True}
 
+def is_running_in_docker():
+    """Detecta si la aplicación se está ejecutando dentro de un contenedor Docker."""
+    if os.path.exists("/.dockerenv"):
+        return True
+    try:
+        with open("/proc/1/cgroup", "rt", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+            return "docker" in content or "containerd" in content or "kubepods" in content
+    except Exception:
+        return False
+
+
 def get_network_shares():
     shares = []
-    if sys.platform != 'win32':
-        return shares
-    try:
-        res = subprocess.run(['net', 'use'], capture_output=True, text=True, timeout=3)
-        for line in res.stdout.splitlines():
-            m = re.search(r'([A-Z]:)\s+(\\\\[^\s]+)', line)
-            if m:
-                drv = m.group(1) + '\\'
-                unc = m.group(2)
-                short_name = unc.rstrip('\\').split('\\')[-1]
-                shares.append({"drive": drv, "remote": unc, "name": f"{m.group(1)} ({short_name})"})
-            else:
-                m_unc = re.search(r'(\\\\[^\s]+)', line)
-                if m_unc and not line.strip().startswith('Local') and not line.strip().startswith('Nombre'):
-                    unc = m_unc.group(1)
+    if sys.platform == 'win32':
+        try:
+            res = subprocess.run(['net', 'use'], capture_output=True, text=True, timeout=3)
+            for line in res.stdout.splitlines():
+                m = re.search(r'([A-Z]:)\s+(\\\\[^\s]+)', line)
+                if m:
+                    drv = m.group(1) + '\\'
+                    unc = m.group(2)
                     short_name = unc.rstrip('\\').split('\\')[-1]
-                    shares.append({"drive": unc, "remote": unc, "name": short_name or unc})
+                    shares.append({"drive": drv, "remote": unc, "name": f"{m.group(1)} ({short_name})"})
+                else:
+                    m_unc = re.search(r'(\\\\[^\s]+)', line)
+                    if m_unc and not line.strip().startswith('Local') and not line.strip().startswith('Nombre'):
+                        unc = m_unc.group(1)
+                        short_name = unc.rstrip('\\').split('\\')[-1]
+                        shares.append({"drive": unc, "remote": unc, "name": short_name or unc})
+        except Exception:
+            pass
+    else:
+        # En Linux / Synology, detectar montajes de red (NFS, CIFS/SMB) desde /proc/mounts o /etc/mtab
+        for mpath in ("/proc/mounts", "/etc/mtab"):
+            if os.path.exists(mpath):
+                try:
+                    with open(mpath, "r", encoding="utf-8", errors="ignore") as f:
+                        for line in f:
+                            parts = line.strip().split()
+                            if len(parts) >= 3:
+                                dev, mnt, fstype = parts[0], parts[1], parts[2].lower()
+                                if fstype in ("cifs", "smbfs", "nfs", "nfs4"):
+                                    if os.path.exists(mnt) and os.path.isdir(mnt):
+                                        sname = os.path.basename(mnt) or mnt
+                                        shares.append({
+                                            "drive": mnt,
+                                            "remote": dev,
+                                            "name": f"Red: {sname} ({dev})"
+                                        })
+                except Exception:
+                    pass
+                break
+    return shares
+
+
+def get_linux_storage_volumes():
+    """
+    Detecta de forma exhaustiva todos los volúmenes de almacenamiento en Linux y Synology DSM:
+    - Volúmenes internos: /volume1 a /volume24
+    - Discos USB y externos Synology: /volumeUSB1 a /volumeUSB20 y sus subcarpetas /volumeUSB*/usbshare*
+    - Carpetas compartidas de USB creadas por DSM: /volume*/usbshare*
+    - Puntos de montaje de discos USB y externos leídos desde /proc/mounts y /etc/mtab
+    - Directorios de medios: /media, /mnt, /run/media, /DATA
+    Retorna una tupla: (drives_list, usb_drives_list, common_folders_list)
+    """
+    drives = ["/"]
+    usb_drives = []
+    common_folders = [
+        {"name": "Raíz del Sistema (/)", "path": "/", "icon": "fa-server"}
+    ]
+    seen_paths = {"/"}
+    mount_candidates = set()
+
+    # 1. Leer puntos de montaje activos desde /proc/mounts o /etc/mtab
+    for mtab_path in ("/proc/mounts", "/etc/mtab"):
+        if os.path.exists(mtab_path):
+            try:
+                with open(mtab_path, "r", encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        parts = line.strip().split()
+                        if len(parts) >= 2:
+                            dev, mnt = parts[0], parts[1]
+                            if mnt.startswith(("/proc", "/sys", "/dev", "/run/lock", "/run/user", "/etc")):
+                                continue
+                            is_usb_mount = any(k in mnt.lower() for k in ("volumeusb", "usbshare", "external", "usb")) or any(k in dev.lower() for k in ("sd", "nvme", "fuse"))
+                            if mnt.startswith(("/volume", "/media", "/mnt", "/DATA", "/storage", "/run/media")) or is_usb_mount:
+                                if os.path.exists(mnt) and os.path.isdir(mnt):
+                                    mount_candidates.add(mnt)
+            except Exception as e:
+                logger.debug(f"No se pudo leer {mtab_path}: {e}")
+            break
+
+    # 2. Escaneo proactivo de patrones de Synology DSM
+    # Volúmenes internos /volume1 a /volume24
+    for v in range(1, 25):
+        vol = f"/volume{v}"
+        if os.path.exists(vol) and os.path.isdir(vol):
+            mount_candidates.add(vol)
+            # Synology DSM suele crear enlaces o carpetas compartidas como /volume1/usbshare, /volume1/usbshare1, etc.
+            try:
+                for entry in os.scandir(vol):
+                    if "usbshare" in entry.name.lower() and entry.is_dir(follow_symlinks=True):
+                        mount_candidates.add(entry.path)
+            except Exception:
+                pass
+
+    # Discos USB en Synology DSM: /volumeUSB1 a /volumeUSB20 y /volumeExternal1 a 10
+    for prefix in ("/volumeUSB", "/volumeExternal"):
+        for u in range(1, 21):
+            u_path = f"{prefix}{u}"
+            if os.path.exists(u_path) and os.path.isdir(u_path):
+                mount_candidates.add(u_path)
+                try:
+                    for entry in os.scandir(u_path):
+                        if entry.is_dir(follow_symlinks=True):
+                            mount_candidates.add(entry.path)
+                except Exception:
+                    pass
+
+    # Rutas estándar de Linux y otros sistemas NAS (CasaOS, ZimaOS, etc.)
+    for p in ("/media", "/mnt", "/DATA", "/usb", "/usbshare"):
+        if os.path.exists(p) and os.path.isdir(p):
+            mount_candidates.add(p)
+            try:
+                for entry in os.scandir(p):
+                    if entry.is_dir(follow_symlinks=True) and not entry.name.startswith('.'):
+                        mount_candidates.add(entry.path)
+            except Exception:
+                pass
+
+    # Escaneo dinámico en la raíz /
+    try:
+        for entry in os.scandir("/"):
+            if entry.is_dir(follow_symlinks=True):
+                name_l = entry.name.lower()
+                if any(name_l.startswith(k) for k in ("volume", "usb", "disk", "media", "mnt", "data", "storage", "external")):
+                    mount_candidates.add(entry.path)
     except Exception:
         pass
-    return shares
+
+    # 3. Clasificar y ordenar candidatos
+    sorted_candidates = sorted(mount_candidates, key=lambda s: (len(s.split('/')), s))
+    for mnt in sorted_candidates:
+        real_mnt = os.path.normpath(mnt)
+        if real_mnt in seen_paths or not os.path.exists(real_mnt) or not os.path.isdir(real_mnt):
+            continue
+        seen_paths.add(real_mnt)
+
+        is_usb = any(k in real_mnt.lower() for k in ("volumeusb", "usbshare", "usb", "external", "removable"))
+
+        free_space_str = ""
+        try:
+            st = os.statvfs(real_mnt)
+            free_bytes = st.f_bavail * st.f_frsize
+            free_space_str = formatear_tamanio(free_bytes)
+        except Exception:
+            pass
+
+        folder_name = os.path.basename(real_mnt) or real_mnt
+        display_name = folder_name
+        if "volumeusb" in real_mnt.lower():
+            display_name = f"USB: {real_mnt}"
+        elif "usbshare" in real_mnt.lower():
+            display_name = f"USB: {folder_name}"
+        elif real_mnt.startswith("/volume"):
+            display_name = f"Volumen: {folder_name}"
+        elif real_mnt in ("/DATA", "/media", "/mnt"):
+            display_name = f"Almacenamiento ({real_mnt})"
+
+        if free_space_str:
+            display_name += f" ({free_space_str} libres)"
+
+        icon = "fa-brands fa-usb" if is_usb else "fa-hard-drive"
+
+        item_obj = {
+            "name": display_name,
+            "path": real_mnt,
+            "icon": icon,
+            "is_usb": is_usb,
+            "free_space": free_space_str
+        }
+
+        if is_usb:
+            usb_drives.append(item_obj)
+            common_folders.append(item_obj)
+            drives.append(real_mnt)
+        else:
+            if real_mnt.startswith("/volume") and real_mnt.count('/') <= 2:
+                drives.append(real_mnt)
+                common_folders.append(item_obj)
+            elif real_mnt in ("/DATA", "/media", "/mnt"):
+                drives.append(real_mnt)
+                common_folders.append(item_obj)
+
+    if os.path.exists(DOWNLOAD_DIR):
+        resolved_dl = str(Path(DOWNLOAD_DIR).resolve())
+        if resolved_dl not in seen_paths:
+            common_folders.append({
+                "name": "Carpeta Descargas",
+                "path": resolved_dl,
+                "icon": "fa-box-archive",
+                "is_usb": False
+            })
+
+    return drives, usb_drives, common_folders
+
 
 @app.get("/api/list_dirs")
 async def list_directories(path: str = ""):
     home = Path.home()
     is_win = sys.platform == 'win32'
+    is_docker = is_running_in_docker()
+    usb_drives = []
 
     if is_win:
         common_folders = [
@@ -1640,38 +2033,32 @@ async def list_directories(path: str = ""):
                 dp = f"{letter}:\\"
                 if os.path.exists(dp):
                     drives.append(dp)
+                    dtype = windll.kernel32.GetDriveTypeW(dp)
+                    if dtype == 2:  # DRIVE_REMOVABLE (USB / Extraíble)
+                        u_item = {
+                            "name": f"Disco USB ({letter}:)",
+                            "path": dp,
+                            "icon": "fa-brands fa-usb",
+                            "is_usb": True
+                        }
+                        usb_drives.append(u_item)
+                        common_folders.append(u_item)
             bitmask >>= 1
         if not drives:
             drives = ["C:\\"]
     else:
-        # En Linux / Synology DSM / ZimaOS / CasaOS
-        common_folders = [
-            {"name": "Raíz del Sistema (/)", "path": "/", "icon": "fa-server"}
-        ]
-        if os.path.exists("/volume1"):
-            common_folders.append({"name": "Volumen 1 (/volume1)", "path": "/volume1", "icon": "fa-hard-drive"})
-        if os.path.exists("/volume1/Descargas Telegram"):
-            common_folders.append({"name": "Descargas Telegram", "path": "/volume1/Descargas Telegram", "icon": "fa-download"})
-        if os.path.exists("/DATA"):
-            common_folders.append({"name": "Almacenamiento (/DATA)", "path": "/DATA", "icon": "fa-hard-drive"})
-        if os.path.exists("/media"):
-            common_folders.append({"name": "Medios (/media)", "path": "/media", "icon": "fa-photo-film"})
-        if os.path.exists(DOWNLOAD_DIR):
-            common_folders.append({"name": "Carpeta Descargas", "path": str(Path(DOWNLOAD_DIR).resolve()), "icon": "fa-box-archive"})
-        common_folders = [f for f in common_folders if os.path.exists(f["path"])]
-
-        drives = ["/"]
-        for v in range(1, 10):
-            vol_path = f"/volume{v}"
-            if os.path.exists(vol_path):
-                drives.append(vol_path)
-        if os.path.exists("/DATA"):
-            drives.append("/DATA")
-        if os.path.exists("/media"):
-            drives.append("/media")
+        drives, usb_drives, common_folders = get_linux_storage_volumes()
 
     # Detectar unidades y carpetas de red compartidas (NAS, Samba, etc.)
     network_shares = get_network_shares()
+
+    docker_usb_warning = None
+    if is_docker and not usb_drives:
+        docker_usb_warning = (
+            "Si tienes un disco USB conectado al Synology NAS y no aparece aquí, "
+            "debes mapear la ruta del USB (ejemplo: '/volumeUSB1/usbshare' -> '/volumeUSB1') "
+            "en la pestaña 'Volumen' de la configuración del contenedor en Container Manager (Docker)."
+        )
 
     target = None
     if path and path.strip():
@@ -1709,14 +2096,14 @@ async def list_directories(path: str = ""):
         with os.scandir(target) as it:
             for entry in it:
                 try:
-                    if entry.is_dir(follow_symlinks=False):
+                    if entry.is_dir(follow_symlinks=True):
                         if not entry.name.startswith('$') and not entry.name.startswith('.'):
                             subdirs.append(entry.name)
                 except (PermissionError, OSError):
                     pass
         subdirs.sort(key=lambda s: s.lower())
     except PermissionError:
-        error_msg = "Acceso denegado (requiere permisos de red o administrador)."
+        error_msg = "Acceso denegado (requiere permisos de lectura en esta carpeta del NAS)."
     except OSError as e:
         error_msg = f"No se pudo acceder a la ruta: {e}"
     except Exception as e:
@@ -1725,12 +2112,15 @@ async def list_directories(path: str = ""):
     return {
         "common": common_folders,
         "drives": drives,
+        "usb_drives": usb_drives,
         "network_shares": network_shares,
         "current": str(target),
         "parent": parent_path,
-        "subdirs": subdirs[:150],
+        "subdirs": subdirs[:500],
         "error": error_msg,
-        "is_win": is_win
+        "is_win": is_win,
+        "is_docker": is_docker,
+        "docker_usb_warning": docker_usb_warning
     }
 
 @app.post("/api/select_folder")
@@ -1782,26 +2172,46 @@ async def create_directory(data: CreateDirRequest):
 @app.post("/api/scan")
 async def scan_channel(data: ScanLink):
     global current_videos_cache
-    canal_input = data.link.strip()
+    raw_input = data.link.strip()
+    url_clean = raw_input.split('?')[0].split('#')[0].rstrip('/')
+
+    canal_input = url_clean
     thread_id = None
     mensaje_id = None
 
-    match_msg = re.search(r't\.me/(?:c/)?([^/]+)/(\d+)', canal_input)
-    if match_msg:
-        canal_input = match_msg.group(1)
-        if canal_input.isdigit():
-            canal_input = int("-100" + canal_input)
-        mensaje_id = int(match_msg.group(2))
+    # Si es un enlace de tipo privado t.me/c/...
+    m_priv_topic_msg = re.search(r't\.me/c/(\d+)/(\d+)/(\d+)$', url_clean)
+    m_priv_msg = re.search(r't\.me/c/(\d+)/(\d+)$', url_clean)
+    m_priv_chan = re.search(r't\.me/c/(\d+)$', url_clean)
+
+    # Si es un enlace de tipo público t.me/username/...
+    m_pub_topic_msg = re.search(r't\.me/([a-zA-Z0-9_]+)/(\d+)/(\d+)$', url_clean)
+    m_pub_msg = re.search(r't\.me/([a-zA-Z0-9_]+)/(\d+)$', url_clean)
+    m_pub_chan = re.search(r't\.me/([a-zA-Z0-9_]+)/?$', url_clean)
+
+    if m_priv_topic_msg:
+        canal_input = int("-100" + m_priv_topic_msg.group(1))
+        thread_id = int(m_priv_topic_msg.group(2))
+        mensaje_id = int(m_priv_topic_msg.group(3))
+    elif m_priv_msg:
+        canal_input = int("-100" + m_priv_msg.group(1))
+        mensaje_id = int(m_priv_msg.group(2))
+    elif m_priv_chan:
+        canal_input = int("-100" + m_priv_chan.group(1))
+    elif m_pub_topic_msg:
+        canal_input = m_pub_topic_msg.group(1)
+        thread_id = int(m_pub_topic_msg.group(2))
+        mensaje_id = int(m_pub_topic_msg.group(3))
+    elif m_pub_msg:
+        canal_input = m_pub_msg.group(1)
+        mensaje_id = int(m_pub_msg.group(2))
+    elif m_pub_chan:
+        canal_input = m_pub_chan.group(1)
     elif "_" in canal_input:
         partes = canal_input.rsplit("_", 1)
         if len(partes) == 2 and partes[1].isdigit():
             canal_input = partes[0]
             thread_id = int(partes[1])
-    
-    if isinstance(canal_input, str):
-        match_chan = re.search(r'(?:https?://)?(?:www\.)?t\.me/([^/?#]+)/?$', canal_input)
-        if match_chan:
-            canal_input = match_chan.group(1)
 
     if str(canal_input).lstrip("-").isdigit():
         canal_input = int(canal_input)
@@ -1892,6 +2302,7 @@ async def scan_channel(data: ScanLink):
                     "id": msg.id, "nombre": nombre, "tamanio": tamanio,
                     "tamanio_fmt": formatear_tamanio(tamanio), "fecha": msg.date.isoformat() if msg.date else "",
                     "carpeta": chat_name,
+                    "channel_name": chat_name,
                     "entity_id": str(entity.id),
                     "message": msg,
                     "reply_to_id": rep_id,
@@ -1985,6 +2396,7 @@ async def scan_channel(data: ScanLink):
                     "id": message.id, "nombre": nombre, "tamanio": tamanio,
                     "tamanio_fmt": formatear_tamanio(tamanio), "fecha": message.date.isoformat() if message.date else "",
                     "carpeta": chat_name,
+                    "channel_name": chat_name,
                     "entity_id": str(entity.id),
                     "message": message,
                     "reply_to_id": rep_id,
@@ -1993,12 +2405,12 @@ async def scan_channel(data: ScanLink):
     except Exception as e:
         return {"success": False, "error": traducir_error_telegram(e)}
 
-    # Cachear los objetos message de telethon
-    for v in videos:
-        messages_cache[(str(entity.id), v["id"])] = v["message"]
+    # Cachear los objetos message de telethon con límite de memoria
+    for v in videos[:200]:
+        cache_message(entity.id, v["id"], v["message"])
 
-    # Guardar en memoria para cuando pidan descargar
-    current_videos_cache = videos
+    # Guardar en memoria acotada para cuando pidan descargar
+    current_videos_cache = videos[:500]
 
     # Agrupar inteligentemente en paquetes por modelo/archivo
     package_list = group_items_into_packages(videos, chat_name, data.custom_dir, str(entity.id))
@@ -2061,13 +2473,15 @@ async def trigger_download(data: DownloadRequest):
                     file_path="",
                     package_name=package_name,
                     channel_name=channel_name,
-                    fecha=itm.fecha
+                    fecha=itm.fecha,
+                    overwrite=data.overwrite
                 )
                 item = DownloadItem(db_id, filename, itm.total_size, package_name, itm.fecha, channel_name)
                 item.db_id = db_id
                 item.message_id = itm.message_id
                 item.entity_id = itm.entity_id
                 item.custom_dir = target_dir
+                item.overwrite = data.overwrite
                 download_mgr.items[db_id] = item
                 db_ids.append(db_id)
 
@@ -2097,18 +2511,20 @@ async def trigger_download(data: DownloadRequest):
                         file_path="",
                         package_name=package_name,
                         channel_name=channel_name,
-                        fecha=video.get("fecha", "")
+                        fecha=video.get("fecha", ""),
+                        overwrite=data.overwrite
                     )
                     item = DownloadItem(db_id, filename, video["tamanio"], package_name, video.get("fecha", ""), channel_name)
                     item.db_id = db_id
                     item.message_id = video["id"]
                     item.entity_id = video.get("entity_id")
                     item.custom_dir = data.custom_dir
+                    item.overwrite = data.overwrite
                     download_mgr.items[db_id] = item
                     db_ids.append(db_id)
 
         if db_ids:
-            asyncio.create_task(process_downloads(db_ids, data.custom_dir))
+            asyncio.create_task(process_downloads(db_ids, data.custom_dir, overwrite=data.overwrite))
         return {"success": True, "db_ids": db_ids}
     else:
         # Reanudar descargas existentes por su ID en la base de datos
@@ -2122,9 +2538,10 @@ async def trigger_download(data: DownloadRequest):
                 download_mgr.items[db_id].state = "pending"
                 download_mgr.items[db_id].cancelled = False
                 download_mgr.items[db_id].pause_event.set()
+                download_mgr.items[db_id].overwrite = data.overwrite
 
         if to_run:
-            asyncio.create_task(process_downloads(to_run, data.custom_dir))
+            asyncio.create_task(process_downloads(to_run, data.custom_dir, overwrite=data.overwrite))
         return {"success": True}
 
 @app.post("/api/download/pause")
@@ -2152,7 +2569,7 @@ async def resume_download(data: DownloadControlRequest):
         all_dls = database.get_all_downloads()
         to_resume_ids = []
         for dl in all_dls:
-            if dl["state"] in ("paused", "pending", "stopped"):
+            if dl["state"] in ("paused", "pending", "stopped", "error"):
                 to_resume_ids.append(dl["id"])
                 database.update_download_state(dl["id"], "pending")
                 if dl["id"] in download_mgr.items:
@@ -2213,6 +2630,7 @@ class AutoChannelReq(BaseModel):
     download_existing: bool = True
     file_types: str = "all"
     subfolder_mode: str = "channel_model"
+    overwrite: bool = False
 
 @app.get("/api/autochannels")
 async def api_get_autochannels():
@@ -2240,7 +2658,13 @@ async def api_add_autochannel(req: AutoChannelReq):
 
         enqueued_count = 0
         if req.download_existing:
-            enqueued_count = await scan_and_enqueue_channel(entity, matched_chan, only_new=False, download_all_existing=True)
+            # Si el canal tiene miles de archivos (ej. 17.000), escanear en segundo plano para no congelar la petición HTTP
+            asyncio.create_task(scan_and_enqueue_channel(entity, matched_chan, only_new=False, download_all_existing=True, overwrite=req.overwrite))
+            return {
+                "status": "ok",
+                "message": f"Canal '{channel_name}' añadido. Se está escaneando el historial en segundo plano.",
+                "enqueued": 0
+            }
         else:
             try:
                 latest = await client.get_messages(entity, limit=1)
@@ -2317,252 +2741,474 @@ async def api_update_autochannel_subfolder_mode(req: dict):
     return {"status": "error", "message": "ID no proporcionado"}
 
 
-# ─── Bucle de Descargas Secuencial ─────────────────────────────────────────
+# ─── Configuración Global ──────────────────────────────────────────
 
-async def process_downloads(db_ids, custom_dir=""):
-    global current_videos_cache, download_mgr, messages_cache, _pending_auto_downloads, _auto_download_total_queued
-    
-    # Encolar los identificadores solicitados evitando duplicados en la cola
-    for db_id in db_ids:
-        if db_id not in download_mgr.queue:
-            download_mgr.queue.append(db_id)
-            
-    # Si ya hay un worker en ejecución, los elementos encolados se procesarán secuencialmente
-    if download_mgr.is_running:
-        return
-        
-    download_mgr.is_running = True
-    download_mgr.global_cancelled = False
-    download_mgr.global_pause_event.set()
-    await manager.send_json({"type": "global_status", "state": "downloading"})
-    
-    base_dir = custom_dir.strip() if custom_dir and custom_dir.strip() else DOWNLOAD_DIR
-    
+class AppSettingsRequest(BaseModel):
+    max_concurrent_downloads: int = 2
+    download_timeout: int = 60
+    max_bandwidth_mbps: float = 0.0
+    max_auto_retries: int = 2
+    webhook_url: str = ""
+
+def obtener_ips_locales():
+    ips = []
+    # 1. Resolver IP principal de interfaz de red activa
     try:
-        while download_mgr.queue:
-            if download_mgr.global_cancelled:
-                break
-                
-            db_id = download_mgr.queue.pop(0)
-            
-            # Recuperar o reconstruir el item de descarga desde la BD si se reinició el servidor
-            item = download_mgr.items.get(db_id)
-            if not item:
-                dl_data = database.get_download(db_id)
-                if not dl_data:
-                    continue
-                item = DownloadItem(
-                    original_idx=db_id,
-                    filename=dl_data["filename"],
-                    total_size=dl_data["total_size"],
-                    package_name=dl_data.get("package_name") or "Descargas",
-                    fecha=dl_data.get("fecha") or "",
-                    channel_name=dl_data.get("channel_name") or ""
-                )
-                item.db_id = db_id
-                item.message_id = dl_data["message_id"]
-                item.entity_id = dl_data["entity_id"]
-                item.custom_dir = dl_data["custom_dir"]
-                item.downloaded_bytes = dl_data.get("downloaded_bytes", 0)
-                item.file_path = dl_data.get("file_path", "")
-                item.state = dl_data.get("state", "pending")
-                download_mgr.items[db_id] = item
-                
-            target_idx = db_id
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0.5)
+        s.connect(('8.8.8.8', 80))
+        ip_activa = s.getsockname()[0]
+        s.close()
+        if ip_activa and not ip_activa.startswith('127.'):
+            ips.append(ip_activa)
+    except Exception:
+        pass
 
-            if download_mgr.global_cancelled or item.cancelled:
-                item.state = "stopped"
-                database.update_download_state(db_id, "stopped")
-                await manager.send_json({"type": "status_change", "index": target_idx, "db_id": db_id, "package_name": item.package_name, "state": "stopped"})
-                continue
+    # 2. Agregar interfaces locales detectadas en el sistema
+    try:
+        hostname = socket.gethostname()
+        for ip in socket.gethostbyname_ex(hostname)[2]:
+            if not ip.startswith('127.') and ip not in ips:
+                ips.append(ip)
+    except Exception:
+        pass
 
-            # Esperar si hay pausa global
-            await download_mgr.global_pause_event.wait()
-            # Esperar si este item particular está pausado
-            await item.pause_event.wait()
-            
-            if download_mgr.global_cancelled or item.cancelled:
-                item.state = "stopped"
-                database.update_download_state(db_id, "stopped")
-                await manager.send_json({"type": "status_change", "index": target_idx, "db_id": db_id, "package_name": item.package_name, "state": "stopped"})
-                continue
+    return ips
 
-            download_mgr.active_index = db_id
-            item.state = "downloading"
-            database.update_download_state(db_id, "downloading")
-            
-            nombre = item.filename
-            tamanio = item.total_size
-            
-            # Obtener el mensaje de Telegram desde la caché en memoria o consultando a Telegram
-            msg_obj = messages_cache.get((str(item.entity_id), item.message_id))
-            if not msg_obj:
-                for v in current_videos_cache:
-                    if v["id"] == item.message_id:
-                        msg_obj = v.get("message")
-                        break
-            
-            if not msg_obj:
-                try:
-                    await ensure_connected()
-                    entity = await resolve_telegram_entity(client, item.entity_id)
-                    msg_obj = await client.get_messages(entity, ids=int(item.message_id))
-                    if not msg_obj or not (getattr(msg_obj, 'media', None) or getattr(msg_obj, 'document', None) or getattr(msg_obj, 'video', None) or getattr(msg_obj, 'photo', None)):
-                        raise ValueError(f"El mensaje #{item.message_id} no contiene un archivo disponible en Telegram")
-                except Exception as e:
-                    item.state = "error"
-                    database.update_download_state(db_id, "error")
-                    await manager.send_json({"type": "error", "message": f"No se pudo acceder al mensaje en Telegram: {e}", "index": target_idx, "db_id": db_id, "package_name": item.package_name})
-                    await manager.send_json({"type": "status_change", "index": target_idx, "db_id": db_id, "package_name": item.package_name, "state": "error"})
-                    continue
-            
-            canal = re.sub(r'[<>:"/\\|?*]', '', str(getattr(item, 'channel_name', '') or "")).strip()
-            carpeta = re.sub(r'[<>:"/\\|?*]', '', str(getattr(item, 'package_name', '') or "Descargas")).strip() or "Descargas"
-            dest_root = item.custom_dir.strip() if getattr(item, 'custom_dir', None) and item.custom_dir.strip() else base_dir
-            
-            # Determinar si pertenece a un canal automatizado y su modo de subcarpetas
-            subfolder_mode = "channel_model"
-            is_auto_channel = False
-            auto_chans = database.get_auto_channels()
-            clean_item_entity = str(item.entity_id or '').lstrip('-')
-            if clean_item_entity.startswith('100'):
-                clean_item_entity = clean_item_entity[3:]
+@app.get("/api/settings")
+async def get_app_settings(request: Request):
+    try:
+        max_concurrent = int(database.get_setting("max_concurrent_downloads", 2))
+    except Exception:
+        max_concurrent = 2
+    try:
+        timeout = int(database.get_setting("download_timeout", 60))
+    except Exception:
+        timeout = 60
+    try:
+        max_bandwidth = float(database.get_setting("max_bandwidth_mbps", 0) or 0)
+    except Exception:
+        max_bandwidth = 0.0
+    try:
+        max_retries = int(database.get_setting("max_auto_retries", 2))
+    except Exception:
+        max_retries = 2
+    webhook_url = str(database.get_setting("webhook_url", "https://chat.clubkarlabeauty.cl/index.php") or "https://chat.clubkarlabeauty.cl/index.php")
 
-            for ac in auto_chans:
-                ac_entity = str(ac.get('entity_id') or '').lstrip('-')
-                if ac_entity.startswith('100'):
-                    ac_entity = ac_entity[3:]
-                if ac_entity and ac_entity == clean_item_entity:
-                    is_auto_channel = True
-                    subfolder_mode = ac.get('subfolder_mode') or 'channel_model'
-                    if not canal and ac.get('channel_name'):
-                        canal = re.sub(r'[<>:"/\\|?*]', '', str(ac.get('channel_name'))).strip()
-                    break
+    # Extraer puerto e IPs locales
+    host_header = request.headers.get("host", "")
+    port = "8000"
+    if ":" in host_header:
+        port = host_header.split(":")[-1]
+    elif request.url.port:
+        port = str(request.url.port)
 
-            if is_auto_channel:
-                fecha_folder = extraer_fecha_carpeta(msg_obj, getattr(item, 'fecha', ''))
-                if subfolder_mode == 'channel_date':
-                    if canal:
-                        download_dir = Path(dest_root) / canal / fecha_folder
-                    else:
-                        download_dir = Path(dest_root) / fecha_folder
-                elif subfolder_mode == 'channel_model':
-                    model_folder = re.sub(r'[<>:"/\\|?*]', '', carpeta or clean_filename_for_pack(nombre) or "General").strip()
-                    if canal and model_folder and canal.lower() != model_folder.lower() and model_folder.lower() != "descargas":
-                        download_dir = Path(dest_root) / canal / model_folder
-                    elif canal:
-                        download_dir = Path(dest_root) / canal
-                    else:
-                        download_dir = Path(dest_root) / model_folder
-                elif subfolder_mode == 'channel_only':
-                    if canal:
-                        download_dir = Path(dest_root) / canal
-                    else:
-                        download_dir = Path(dest_root)
-                else:  # 'flat'
-                    download_dir = Path(dest_root)
+    local_ips = obtener_ips_locales()
+    client_host = host_header.split(":")[0] if host_header else ""
+    if client_host and client_host not in ('localhost', '127.0.0.1', '0.0.0.0') and not client_host.startswith('127.'):
+        if client_host not in local_ips:
+            local_ips.insert(0, client_host)
+
+    server_urls = [f"http://{ip}:{port}" for ip in local_ips]
+    primary_url = server_urls[0] if server_urls else f"http://127.0.0.1:{port}"
+
+    return {
+        "max_concurrent_downloads": max(1, min(5, max_concurrent)),
+        "download_timeout": max(15, min(600, timeout)),
+        "max_bandwidth_mbps": max(0.0, max_bandwidth),
+        "max_auto_retries": max(0, min(5, max_retries)),
+        "webhook_url": webhook_url,
+        "local_ips": local_ips,
+        "port": port,
+        "server_urls": server_urls,
+        "primary_url": primary_url
+    }
+
+@app.post("/api/settings")
+async def save_app_settings(data: AppSettingsRequest):
+    max_concurrent = max(1, min(5, data.max_concurrent_downloads))
+    timeout = max(15, min(600, data.download_timeout))
+    max_bandwidth = max(0.0, data.max_bandwidth_mbps)
+    max_retries = max(0, min(5, data.max_auto_retries))
+    webhook_url = data.webhook_url.strip()
+
+    database.set_setting("max_concurrent_downloads", max_concurrent)
+    database.set_setting("download_timeout", timeout)
+    database.set_setting("max_bandwidth_mbps", max_bandwidth)
+    database.set_setting("max_auto_retries", max_retries)
+    database.set_setting("webhook_url", webhook_url)
+    return {
+        "success": True,
+        "max_concurrent_downloads": max_concurrent,
+        "download_timeout": timeout,
+        "max_bandwidth_mbps": max_bandwidth,
+        "max_auto_retries": max_retries,
+        "webhook_url": webhook_url
+    }
+
+@app.post("/api/settings/test_webhook")
+async def test_webhook_endpoint(req: dict):
+    url = (req.get("webhook_url") or "").strip()
+    if not url:
+        return {"success": False, "error": "Debe ingresar una URL de Webhook válida."}
+    database.set_setting("webhook_url", url)
+    await send_webhook_notification(
+        "Prueba de Notificación",
+        "¡El sistema de notificaciones push de Telegram Downloader funciona correctamente!",
+        "success"
+    )
+    return {"success": True, "message": "Notificación de prueba enviada con éxito."}
+
+
+# ─── Control de Ancho de Banda y Webhooks ──────────────────────────────────
+
+class BandwidthRateLimiter:
+    def __init__(self):
+        self.lock = asyncio.Lock()
+        self.last_check = time.time()
+        self.allowance = 0.0
+
+    async def consume(self, num_bytes: int):
+        try:
+            speed_mbps = float(database.get_setting("max_bandwidth_mbps", 0) or 0)
+        except Exception:
+            speed_mbps = 0.0
+        if speed_mbps <= 0:
+            return  # Sin límite
+
+        max_bytes_per_sec = speed_mbps * 1024 * 1024
+        async with self.lock:
+            now = time.time()
+            elapsed = now - self.last_check
+            self.last_check = now
+            self.allowance += elapsed * max_bytes_per_sec
+            if self.allowance > max_bytes_per_sec:
+                self.allowance = max_bytes_per_sec
+
+            self.allowance -= num_bytes
+            if self.allowance < 0:
+                sleep_time = (-self.allowance) / max_bytes_per_sec
+                if sleep_time > 0.001:
+                    await asyncio.sleep(min(sleep_time, 2.0))
+
+rate_limiter = BandwidthRateLimiter()
+
+
+async def send_webhook_notification(title: str, message: str, event_type: str = "info"):
+    try:
+        webhook_url = str(database.get_setting("webhook_url", "") or "").strip()
+    except Exception:
+        webhook_url = ""
+
+    if not webhook_url:
+        return
+
+    async def _do_send():
+        import urllib.request
+        import json
+
+        try:
+            if "discord.com/api/webhooks" in webhook_url:
+                color = 0x107c10 if event_type == "success" else (0xd92d20 if event_type == "error" else 0x24a1de)
+                payload = {
+                    "embeds": [{
+                        "title": title,
+                        "description": message,
+                        "color": color,
+                        "footer": {"text": "Telegram Downloader NAS"}
+                    }]
+                }
             else:
-                # Descargas normales (Capturador de Enlaces o escaneo manual)
-                if canal and carpeta and canal.lower() != carpeta.lower() and carpeta.lower() != "descargas":
-                    download_dir = Path(dest_root) / canal / carpeta
-                elif canal:
-                    download_dir = Path(dest_root) / canal
-                else:
-                    download_dir = Path(dest_root) / carpeta
+                payload = {
+                    "title": title,
+                    "message": message,
+                    "event": event_type
+                }
 
-            download_dir.mkdir(parents=True, exist_ok=True)
-            
-            ruta_destino = download_dir / nombre
-            ruta_temp = download_dir / f"{nombre}.tdl"
-            item.file_path = str(ruta_temp.resolve())
-            
-            await manager.send_json({
-                "type": "start",
-                "filename": nombre,
-                "index": target_idx,
-                "db_id": db_id,
-                "package_name": item.package_name
-            })
-            await manager.send_json({"type": "status_change", "index": target_idx, "db_id": db_id, "package_name": item.package_name, "state": "downloading"})
+            data_bytes = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(
+                webhook_url,
+                data=data_bytes,
+                headers={"Content-Type": "application/json", "User-Agent": "TelegramDownloader/2.0"},
+                method="POST"
+            )
 
-            if ruta_destino.exists() and ruta_destino.stat().st_size == tamanio and tamanio > 0:
-                item.state = "done"
-                item.downloaded_bytes = tamanio
-                item.file_path = str(ruta_destino.resolve())
-                database.update_download_state(db_id, "done")
-                database.update_download_progress(db_id, tamanio, str(ruta_destino.resolve()))
-                await manager.send_json({"type": "done", "index": target_idx, "db_id": db_id, "package_name": item.package_name, "file_path": str(ruta_destino.resolve())})
-                await manager.send_json({"type": "status_change", "index": target_idx, "db_id": db_id, "package_name": item.package_name, "state": "done", "file_path": str(ruta_destino.resolve())})
-                _pending_auto_downloads.discard(db_id)
-                if _auto_download_total_queued > 0 and len(_pending_auto_downloads) == 0:
-                    completed_count = _auto_download_total_queued
-                    _auto_download_total_queued = 0
-                    await manager.send_json({
-                        "type": "toast",
-                        "message": f"Las descargas automatizadas han finalizado ({completed_count} archivo(s) procesados).",
-                        "toast_type": "success",
-                        "duration": 10000,
-                        "title": "Descargas Finalizadas"
-                    })
-                continue
-                
-            try:
-                CHUNK_SIZE = 1024 * 1024
-                media_to_download = getattr(msg_obj, 'document', None) or getattr(msg_obj, 'photo', None) or getattr(msg_obj, 'video', None) or getattr(msg_obj, 'media', None)
-                
-                descargados_total = 0
-                last_time = time.time()
-                last_bytes = 0
+            def _make_req():
+                try:
+                    with urllib.request.urlopen(req, timeout=10) as resp:
+                        pass
+                except Exception as e:
+                    logger.warning(f"Error enviando Webhook: {e}")
 
-                # Para fotos o archivos pequeños (<= 1MB), descarga secuencial directa
-                if getattr(msg_obj, 'photo', None) or tamanio <= CHUNK_SIZE:
-                    with open(ruta_temp, 'wb') as f:
-                        await ensure_connected()
-                        async for chunk in client.iter_download(media_to_download, request_size=CHUNK_SIZE):
-                            if download_mgr.global_cancelled or item.cancelled:
-                                break
-                            await download_mgr.global_pause_event.wait()
-                            await item.pause_event.wait()
-                            if download_mgr.global_cancelled or item.cancelled:
-                                break
+            await asyncio.to_thread(_make_req)
+        except Exception as err:
+            logger.warning(f"Excepción al procesar Webhook: {err}")
 
-                            f.write(chunk)
-                            descargados_total += len(chunk)
-                            item.downloaded_bytes = descargados_total
+    asyncio.create_task(_do_send())
 
-                            current_time = time.time()
-                            if current_time - last_time > 0.2:
-                                speed = (descargados_total - last_bytes) / (current_time - last_time) / (1024*1024)
-                                database.update_download_progress(db_id, descargados_total)
-                                await manager.send_json({
-                                    "type": "progress",
-                                    "downloaded": descargados_total,
-                                    "total_size": tamanio or descargados_total,
-                                    "speed_mbps": round(max(0, speed), 1),
-                                    "index": target_idx,
-                                    "db_id": db_id,
-                                    "package_name": item.package_name,
-                                    "state": item.state
-                                })
-                                last_time = current_time
-                                last_bytes = descargados_total
 
-                    if (tamanio == 0 or tamanio != descargados_total) and descargados_total > 0:
-                        tamanio = descargados_total
-                        item.total_size = descargados_total
-                else:
-                    # Para archivos grandes (> 1MB), descarga paralela por chunks de 1MB
-                    if not ruta_temp.exists() or ruta_temp.stat().st_size != tamanio:
-                        with open(ruta_temp, 'wb') as f:
-                            if tamanio > 0:
-                                f.seek(tamanio - 1)
-                                f.write(b'\0')
+# ─── Bucle de Descargas Paralelas con Timeout ──────────────────────────────
 
-                    sem = asyncio.Semaphore(4)
+async def iter_download_with_timeout(tg_client, media, request_size=1024*1024, offset=0, timeout=60):
+    """Generador asíncrono para descargar fragmentos de Telegram garantizando un timeout si se congela."""
+    it = tg_client.iter_download(media, request_size=request_size, offset=offset).__aiter__()
+    while True:
+        try:
+            chunk = await asyncio.wait_for(it.__anext__(), timeout=float(timeout))
+            yield chunk
+        except StopAsyncIteration:
+            break
+        except asyncio.TimeoutError:
+            raise TimeoutError(f"La descarga se congeló (sin datos durante {timeout}s)")
 
-                    async def descargar_chunk(offset, chunk_size_bytes):
-                        nonlocal descargados_total, last_time, last_bytes
 
+async def download_single_file(db_id, base_dir, overwrite=False):
+    global current_videos_cache, download_mgr, messages_cache, _pending_auto_downloads, _auto_download_total_queued
+
+    try:
+        dl_timeout = int(database.get_setting("download_timeout", 60))
+    except Exception:
+        dl_timeout = 60
+
+    item = download_mgr.items.get(db_id)
+    if not item:
+        dl_data = database.get_download(db_id)
+        if not dl_data:
+            return
+        item = DownloadItem(
+            original_idx=db_id,
+            filename=dl_data["filename"],
+            total_size=dl_data["total_size"],
+            package_name=dl_data.get("package_name") or "Descargas",
+            fecha=dl_data.get("fecha") or "",
+            channel_name=dl_data.get("channel_name") or ""
+        )
+        item.db_id = db_id
+        item.message_id = dl_data["message_id"]
+        item.entity_id = dl_data["entity_id"]
+        item.custom_dir = dl_data["custom_dir"]
+        item.downloaded_bytes = dl_data.get("downloaded_bytes", 0)
+        item.file_path = dl_data.get("file_path", "")
+        item.state = dl_data.get("state", "pending")
+        item.overwrite = overwrite
+        download_mgr.items[db_id] = item
+
+    target_idx = db_id
+
+    if download_mgr.global_cancelled or item.cancelled:
+        item.state = "stopped"
+        database.update_download_state(db_id, "stopped")
+        await manager.send_json({"type": "status_change", "index": target_idx, "db_id": db_id, "package_name": item.package_name, "state": "stopped"})
+        return
+
+    # Esperar si hay pausa global o de este item en particular
+    await download_mgr.global_pause_event.wait()
+    await item.pause_event.wait()
+
+    if download_mgr.global_cancelled or item.cancelled:
+        item.state = "stopped"
+        database.update_download_state(db_id, "stopped")
+        await manager.send_json({"type": "status_change", "index": target_idx, "db_id": db_id, "package_name": item.package_name, "state": "stopped"})
+        return
+
+    download_mgr.active_indices.add(db_id)
+    item.state = "downloading"
+    database.update_download_state(db_id, "downloading")
+
+    nombre = item.filename
+    tamanio = item.total_size
+
+    msg_obj = messages_cache.get((str(item.entity_id), item.message_id))
+    if not msg_obj:
+        for v in current_videos_cache:
+            if v["id"] == item.message_id:
+                msg_obj = v.get("message")
+                break
+
+    if not msg_obj:
+        try:
+            await ensure_connected()
+            entity = await resolve_telegram_entity(client, item.entity_id)
+            msg_obj = await asyncio.wait_for(client.get_messages(entity, ids=int(item.message_id)), timeout=float(dl_timeout))
+            if not msg_obj or not (getattr(msg_obj, 'media', None) or getattr(msg_obj, 'document', None) or getattr(msg_obj, 'video', None) or getattr(msg_obj, 'photo', None)):
+                raise ValueError(f"El mensaje #{item.message_id} no contiene un archivo disponible en Telegram")
+        except Exception as e:
+            logger.error(f"Error accediendo al mensaje #{item.message_id}: {e}", exc_info=True)
+            item.state = "error"
+            database.update_download_state(db_id, "error")
+            await manager.send_json({"type": "error", "message": f"No se pudo acceder al mensaje en Telegram: {e}", "index": target_idx, "db_id": db_id, "package_name": item.package_name})
+            await manager.send_json({"type": "status_change", "index": target_idx, "db_id": db_id, "package_name": item.package_name, "state": "error"})
+            download_mgr.active_indices.discard(db_id)
+            return
+
+    canal = re.sub(r'[<>:"/\\|?*]', '', str(getattr(item, 'channel_name', '') or "")).strip()
+    carpeta = re.sub(r'[<>:"/\\|?*]', '', str(getattr(item, 'package_name', '') or "Descargas")).strip() or "Descargas"
+    dest_root = item.custom_dir.strip() if getattr(item, 'custom_dir', None) and item.custom_dir.strip() else base_dir
+
+    subfolder_mode = "channel_model"
+    is_auto_channel = False
+    auto_chans = database.get_auto_channels()
+    clean_item_entity = str(item.entity_id or '').lstrip('-')
+    if clean_item_entity.startswith('100'):
+        clean_item_entity = clean_item_entity[3:]
+
+    for ac in auto_chans:
+        ac_entity = str(ac.get('entity_id') or '').lstrip('-')
+        if ac_entity.startswith('100'):
+            ac_entity = ac_entity[3:]
+        if ac_entity and ac_entity == clean_item_entity:
+            is_auto_channel = True
+            subfolder_mode = ac.get('subfolder_mode') or 'channel_model'
+            if not canal and ac.get('channel_name'):
+                canal = re.sub(r'[<>:"/\\|?*]', '', str(ac.get('channel_name'))).strip()
+            break
+
+    if is_auto_channel:
+        fecha_folder = extraer_fecha_carpeta(msg_obj, getattr(item, 'fecha', ''))
+        if subfolder_mode == 'channel_date':
+            download_dir = Path(dest_root) / canal / fecha_folder if canal else Path(dest_root) / fecha_folder
+        elif subfolder_mode == 'channel_model':
+            model_folder = re.sub(r'[<>:"/\\|?*]', '', carpeta or clean_filename_for_pack(nombre) or "General").strip()
+            if canal and model_folder and canal.lower() != model_folder.lower() and model_folder.lower() != "descargas":
+                download_dir = Path(dest_root) / canal / model_folder
+            elif canal:
+                download_dir = Path(dest_root) / canal
+            else:
+                download_dir = Path(dest_root) / model_folder
+        elif subfolder_mode == 'channel_only':
+            download_dir = Path(dest_root) / canal if canal else Path(dest_root)
+        else:
+            download_dir = Path(dest_root)
+    else:
+        if canal and carpeta and canal.lower() != carpeta.lower() and carpeta.lower() != "descargas":
+            download_dir = Path(dest_root) / canal / carpeta
+        elif canal:
+            download_dir = Path(dest_root) / canal
+        else:
+            download_dir = Path(dest_root) / carpeta
+
+    download_dir.mkdir(parents=True, exist_ok=True)
+    ruta_destino = download_dir / nombre
+    ruta_temp = download_dir / f"{nombre}.tdl"
+    item.file_path = str(ruta_temp.resolve())
+
+    await manager.send_json({
+        "type": "start",
+        "filename": nombre,
+        "index": target_idx,
+        "db_id": db_id,
+        "package_name": item.package_name,
+        "channel_name": getattr(item, 'channel_name', '')
+    })
+    await manager.send_json({"type": "status_change", "index": target_idx, "db_id": db_id, "package_name": item.package_name, "channel_name": getattr(item, 'channel_name', ''), "state": "downloading"})
+
+    if not getattr(item, 'overwrite', False) and ruta_destino.exists() and ruta_destino.stat().st_size == tamanio and tamanio > 0:
+        item.state = "done"
+        item.downloaded_bytes = tamanio
+        item.file_path = str(ruta_destino.resolve())
+        database.update_download_state(db_id, "done")
+        database.update_download_progress(db_id, tamanio, str(ruta_destino.resolve()))
+        await manager.send_json({"type": "done", "index": target_idx, "db_id": db_id, "package_name": item.package_name, "channel_name": getattr(item, 'channel_name', ''), "file_path": str(ruta_destino.resolve())})
+        await manager.send_json({"type": "status_change", "index": target_idx, "db_id": db_id, "package_name": item.package_name, "channel_name": getattr(item, 'channel_name', ''), "state": "done", "file_path": str(ruta_destino.resolve())})
+        _pending_auto_downloads.discard(db_id)
+        download_mgr.active_indices.discard(db_id)
+        return
+
+    try:
+        total_b, used_b, free_b = shutil.disk_usage(download_dir)
+        espacio_necesario = tamanio if tamanio > 0 else 1024 * 1024
+        if free_b < espacio_necesario:
+            msg = f"Espacio insuficiente en disco: Se requieren {formatear_tamanio(espacio_necesario)} pero solo hay {formatear_tamanio(free_b)} libres en la unidad."
+            logger.error(f"Error iniciando descarga de {nombre}: {msg}")
+            item.state = "error"
+            database.update_download_state(db_id, "error")
+            await manager.send_json({"type": "error", "message": msg, "index": target_idx, "db_id": db_id, "package_name": item.package_name})
+            await manager.send_json({"type": "status_change", "index": target_idx, "db_id": db_id, "package_name": item.package_name, "state": "error"})
+            await manager.send_json({"type": "toast", "message": msg, "toast_type": "error", "duration": 6000})
+            _pending_auto_downloads.discard(db_id)
+            download_mgr.active_indices.discard(db_id)
+            return
+    except Exception as space_err:
+        logger.warning(f"No se pudo comprobar el espacio en disco: {space_err}")
+
+    try:
+        CHUNK_SIZE = 1024 * 1024
+        media_to_download = getattr(msg_obj, 'document', None) or getattr(msg_obj, 'photo', None) or getattr(msg_obj, 'video', None) or getattr(msg_obj, 'media', None)
+        descargados_total = 0
+        last_time = time.time()
+        last_bytes = 0
+
+        if getattr(msg_obj, 'photo', None) or tamanio <= CHUNK_SIZE:
+            with open(ruta_temp, 'wb') as f:
+                await ensure_connected()
+                async for chunk in iter_download_with_timeout(client, media_to_download, request_size=CHUNK_SIZE, timeout=dl_timeout):
+                    if download_mgr.global_cancelled or item.cancelled:
+                        break
+                    await download_mgr.global_pause_event.wait()
+                    await item.pause_event.wait()
+                    if download_mgr.global_cancelled or item.cancelled:
+                        break
+
+                    f.write(chunk)
+                    descargados_total += len(chunk)
+                    item.downloaded_bytes = descargados_total
+
+                    await rate_limiter.consume(len(chunk))
+
+                    current_time = time.time()
+                    if current_time - last_time > 0.2:
+                        speed = (descargados_total - last_bytes) / (current_time - last_time) / (1024*1024)
+                        database.update_download_progress(db_id, descargados_total)
+                        await manager.send_json({
+                            "type": "progress",
+                            "downloaded": descargados_total,
+                            "total_size": tamanio or descargados_total,
+                            "speed_mbps": round(max(0, speed), 1),
+                            "index": target_idx,
+                            "db_id": db_id,
+                            "package_name": item.package_name,
+                            "channel_name": getattr(item, 'channel_name', ''),
+                            "state": item.state
+                        })
+                        last_time = current_time
+                        last_bytes = descargados_total
+
+            if (tamanio == 0 or tamanio != descargados_total) and descargados_total > 0:
+                tamanio = descargados_total
+                item.total_size = descargados_total
+        else:
+            if not ruta_temp.exists() or ruta_temp.stat().st_size != tamanio:
+                with open(ruta_temp, 'wb') as f:
+                    if tamanio > 0:
+                        f.seek(tamanio - 1)
+                        f.write(b'\0')
+
+            chunk_sem = asyncio.Semaphore(2)
+
+            async def descargar_chunk(offset, chunk_size_bytes):
+                nonlocal descargados_total, last_time, last_bytes
+
+                if download_mgr.global_cancelled or item.cancelled:
+                    return
+                await download_mgr.global_pause_event.wait()
+                await item.pause_event.wait()
+                if download_mgr.global_cancelled or item.cancelled:
+                    return
+
+                async with chunk_sem:
+                    if download_mgr.global_cancelled or item.cancelled:
+                        return
+                    await download_mgr.global_pause_event.wait()
+                    await item.pause_event.wait()
+                    if download_mgr.global_cancelled or item.cancelled:
+                        return
+
+                    chunk_data = bytearray()
+                    bytes_leidos = 0
+                    await ensure_connected()
+                    async for chunk in iter_download_with_timeout(
+                        client, media_to_download, offset=offset, request_size=1024*1024, timeout=dl_timeout
+                    ):
                         if download_mgr.global_cancelled or item.cancelled:
                             return
                         await download_mgr.global_pause_event.wait()
@@ -2570,130 +3216,168 @@ async def process_downloads(db_ids, custom_dir=""):
                         if download_mgr.global_cancelled or item.cancelled:
                             return
 
-                        async with sem:
-                            if download_mgr.global_cancelled or item.cancelled:
-                                return
-                            await download_mgr.global_pause_event.wait()
-                            await item.pause_event.wait()
-                            if download_mgr.global_cancelled or item.cancelled:
-                                return
+                        faltan = chunk_size_bytes - bytes_leidos
+                        if len(chunk) > faltan:
+                            chunk = chunk[:faltan]
 
-                            chunk_data = bytearray()
-                            bytes_leidos = 0
-                            await ensure_connected()
-                            async for chunk in client.iter_download(
-                                media_to_download, 
-                                offset=offset, 
-                                request_size=1024*1024
-                            ):
-                                if download_mgr.global_cancelled or item.cancelled:
-                                    return
-                                await download_mgr.global_pause_event.wait()
-                                await item.pause_event.wait()
-                                if download_mgr.global_cancelled or item.cancelled:
-                                    return
+                        chunk_data.extend(chunk)
+                        bytes_leidos += len(chunk)
+                        descargados_total += len(chunk)
+                        item.downloaded_bytes = descargados_total
 
-                                faltan = chunk_size_bytes - bytes_leidos
-                                if len(chunk) > faltan:
-                                    chunk = chunk[:faltan]
+                        await rate_limiter.consume(len(chunk))
 
-                                chunk_data.extend(chunk)
-                                bytes_leidos += len(chunk)
-                                descargados_total += len(chunk)
-                                item.downloaded_bytes = descargados_total
+                        current_time = time.time()
+                        if current_time - last_time > 0.2:
+                            speed = (descargados_total - last_bytes) / (current_time - last_time) / (1024*1024)
+                            database.update_download_progress(db_id, descargados_total)
+                            await manager.send_json({
+                                "type": "progress",
+                                "downloaded": descargados_total,
+                                "total_size": tamanio,
+                                "speed_mbps": round(max(0, speed), 1),
+                                "index": target_idx,
+                                "db_id": db_id,
+                                "package_name": item.package_name,
+                                "channel_name": getattr(item, 'channel_name', ''),
+                                "state": item.state
+                            })
+                            last_time = current_time
+                            last_bytes = descargados_total
 
-                                current_time = time.time()
-                                if current_time - last_time > 0.2:
-                                    speed = (descargados_total - last_bytes) / (current_time - last_time) / (1024*1024)
-                                    database.update_download_progress(db_id, descargados_total)
-                                    await manager.send_json({
-                                        "type": "progress",
-                                        "downloaded": descargados_total,
-                                        "total_size": tamanio,
-                                        "speed_mbps": round(max(0, speed), 1),
-                                        "index": target_idx,
-                                        "db_id": db_id,
-                                        "package_name": item.package_name,
-                                        "state": item.state
-                                    })
-                                    last_time = current_time
-                                    last_bytes = descargados_total
+                        if bytes_leidos >= chunk_size_bytes:
+                            break
 
-                                if bytes_leidos >= chunk_size_bytes:
-                                    break
+                    if not (download_mgr.global_cancelled or item.cancelled):
+                        with open(ruta_temp, 'r+b') as f:
+                            f.seek(offset)
+                            f.write(chunk_data)
 
-                            if not (download_mgr.global_cancelled or item.cancelled):
-                                with open(ruta_temp, 'r+b') as f:
-                                    f.seek(offset)
-                                    f.write(chunk_data)
+            tareas = []
+            for offset in range(0, tamanio, CHUNK_SIZE):
+                limit = min(CHUNK_SIZE, tamanio - offset)
+                tareas.append(descargar_chunk(offset, limit))
 
-                    tareas = []
-                    for offset in range(0, tamanio, CHUNK_SIZE):
-                        limit = min(CHUNK_SIZE, tamanio - offset)
-                        tareas.append(descargar_chunk(offset, limit))
+            await asyncio.gather(*tareas)
 
-                    await asyncio.gather(*tareas)
+        if download_mgr.global_cancelled or item.cancelled:
+            item.state = "stopped"
+            database.update_download_state(db_id, "stopped")
+            database.update_download_progress(db_id, descargados_total, str(ruta_temp.resolve()))
+            await manager.send_json({
+                "type": "progress", "downloaded": descargados_total, "total_size": tamanio, "speed_mbps": 0, "index": target_idx, "db_id": db_id, "package_name": item.package_name, "channel_name": getattr(item, 'channel_name', ''), "state": "stopped"
+            })
+            await manager.send_json({"type": "status_change", "index": target_idx, "db_id": db_id, "package_name": item.package_name, "channel_name": getattr(item, 'channel_name', ''), "state": "stopped"})
+        else:
+            if ruta_temp.exists():
+                os.replace(ruta_temp, ruta_destino)
 
-                if download_mgr.global_cancelled or item.cancelled:
-                    item.state = "stopped"
-                    database.update_download_state(db_id, "stopped")
-                    database.update_download_progress(db_id, descargados_total, str(ruta_temp.resolve()))
-                    await manager.send_json({
-                        "type": "progress", "downloaded": descargados_total, "total_size": tamanio, "speed_mbps": 0, "index": target_idx, "db_id": db_id, "package_name": item.package_name, "state": "stopped"
-                    })
-                    await manager.send_json({"type": "status_change", "index": target_idx, "db_id": db_id, "package_name": item.package_name, "state": "stopped"})
-                else:
-                    # Al completar el 100%, eliminar la extensión temporal .tdl (archivo.rar.tdl -> archivo.rar)
-                    if ruta_temp.exists():
-                        os.replace(ruta_temp, ruta_destino)
+            item.state = "done"
+            item.downloaded_bytes = descargados_total
+            item.file_path = str(ruta_destino.resolve())
+            database.update_download_state(db_id, "done")
+            database.update_download_progress(db_id, descargados_total, str(ruta_destino.resolve()))
+            await manager.send_json({
+                "type": "progress", "downloaded": descargados_total, "total_size": tamanio, "speed_mbps": 0, "index": target_idx, "db_id": db_id, "package_name": item.package_name, "channel_name": getattr(item, 'channel_name', ''), "state": "done"
+            })
+            await manager.send_json({"type": "done", "index": target_idx, "db_id": db_id, "package_name": item.package_name, "channel_name": getattr(item, 'channel_name', ''), "file_path": str(ruta_destino.resolve())})
+            await manager.send_json({"type": "status_change", "index": target_idx, "db_id": db_id, "package_name": item.package_name, "channel_name": getattr(item, 'channel_name', ''), "state": "done", "file_path": str(ruta_destino.resolve())})
 
-                    item.state = "done"
-                    item.downloaded_bytes = descargados_total
-                    item.file_path = str(ruta_destino.resolve())
-                    database.update_download_state(db_id, "done")
-                    database.update_download_progress(db_id, descargados_total, str(ruta_destino.resolve()))
-                    await manager.send_json({
-                        "type": "progress", "downloaded": descargados_total, "total_size": tamanio, "speed_mbps": 0, "index": target_idx, "db_id": db_id, "package_name": item.package_name, "state": "done"
-                    })
-                    await manager.send_json({"type": "done", "index": target_idx, "db_id": db_id, "package_name": item.package_name, "file_path": str(ruta_destino.resolve())})
+    except (TimeoutError, asyncio.TimeoutError, ConnectionError, OSError, Exception) as e:
+        try:
+            max_retries = int(database.get_setting("max_auto_retries", 2))
+        except Exception:
+            max_retries = 2
 
-                    await manager.send_json({"type": "status_change", "index": target_idx, "db_id": db_id, "package_name": item.package_name, "state": "done", "file_path": str(ruta_destino.resolve())})
-                    
-            except (ConnectionError, OSError) as e:
-                logger.warning(f"Error de conexión descargando {nombre}: {e}")
-                try:
-                    await ensure_connected()
-                except Exception:
-                    pass
-                item.state = "error"
-                database.update_download_state(db_id, "error")
-                await manager.send_json({"type": "error", "message": f"Error de conexión: {traducir_error_telegram(e)}. La sesión se reconectó automáticamente.", "index": target_idx, "db_id": db_id, "package_name": item.package_name})
-                await manager.send_json({"type": "status_change", "index": target_idx, "db_id": db_id, "package_name": item.package_name, "state": "error"})
-            except Exception as e:
-                item.state = "error"
-                database.update_download_state(db_id, "error")
-                await manager.send_json({"type": "error", "message": traducir_error_telegram(e), "index": target_idx, "db_id": db_id, "package_name": item.package_name})
-                await manager.send_json({"type": "status_change", "index": target_idx, "db_id": db_id, "package_name": item.package_name, "state": "error"})
-            finally:
-                _pending_auto_downloads.discard(db_id)
-                if _auto_download_total_queued > 0 and len(_pending_auto_downloads) == 0:
-                    completed_count = _auto_download_total_queued
-                    _auto_download_total_queued = 0
-                    await manager.send_json({
-                        "type": "toast",
-                        "message": f"Las descargas automatizadas han finalizado correctamente ({completed_count} archivo(s) procesados).",
-                        "toast_type": "success",
-                        "duration": 10000,
-                        "title": "Descargas Finalizadas"
-                    })
+        if item.retries_count < max_retries:
+            item.retries_count += 1
+            retry_delay = min(10, 2 * item.retries_count)
+            logger.warning(f"Error temporal descargando {nombre}: {e}. Reintentando ({item.retries_count}/{max_retries}) en {retry_delay}s...")
+            await manager.send_json({
+                "type": "toast",
+                "message": f"Error temporal en '{nombre}'. Reintentando (Intento {item.retries_count}/{max_retries})...",
+                "toast_type": "warning",
+                "duration": 4000
+            })
+            await asyncio.sleep(retry_delay)
+            try:
+                await ensure_connected()
+            except Exception:
+                pass
+            return await download_single_file(db_id, base_dir, overwrite)
 
+        logger.error(f"Error definitivo descargando {nombre}: {e}")
+        item.state = "error"
+        database.update_download_state(db_id, "error")
+        await manager.send_json({"type": "error", "message": f"Error tras {max_retries} reintentos: {traducir_error_telegram(e)}", "index": target_idx, "db_id": db_id, "package_name": item.package_name})
+        await manager.send_json({"type": "status_change", "index": target_idx, "db_id": db_id, "package_name": item.package_name, "state": "error"})
+        await send_webhook_notification("Error de Descarga", f"No se pudo descargar '{nombre}' en {item.package_name} tras {max_retries} reintentos: {e}", "error")
     finally:
+        download_mgr.active_indices.discard(db_id)
+        _pending_auto_downloads.discard(db_id)
+
+
+_worker_pool_lock = asyncio.Lock()
+_active_worker_tasks = set()
+
+async def _worker_loop(base_dir):
+    global download_mgr, _active_worker_tasks
+    while download_mgr.queue and not download_mgr.global_cancelled:
+        try:
+            db_id = download_mgr.queue.pop(0)
+        except IndexError:
+            break
+        item = download_mgr.items.get(db_id)
+        overwrite = item.overwrite if item else False
+        await download_single_file(db_id, base_dir, overwrite)
+        await asyncio.sleep(0.05)
+
+
+async def process_downloads(db_ids, custom_dir="", overwrite=False):
+    global current_videos_cache, download_mgr, messages_cache, _pending_auto_downloads, _auto_download_total_queued, _active_worker_tasks
+
+    for db_id in db_ids:
+        if overwrite and db_id in download_mgr.items:
+            download_mgr.items[db_id].overwrite = True
+        if db_id not in download_mgr.queue:
+            download_mgr.queue.append(db_id)
+
+    base_dir = custom_dir.strip() if custom_dir and custom_dir.strip() else DOWNLOAD_DIR
+
+    try:
+        max_concurrent = int(database.get_setting("max_concurrent_downloads", 2))
+    except Exception:
+        max_concurrent = 2
+    max_concurrent = max(1, min(5, max_concurrent))
+
+    download_mgr.is_running = True
+    download_mgr.global_cancelled = False
+    download_mgr.global_pause_event.set()
+    await manager.send_json({"type": "global_status", "state": "downloading"})
+
+    _active_worker_tasks = {t for t in _active_worker_tasks if not t.done()}
+
+    async with _worker_pool_lock:
+        needed = max_concurrent - len(_active_worker_tasks)
+        for _ in range(needed):
+            if not download_mgr.queue:
+                break
+            task = asyncio.create_task(_worker_loop(base_dir))
+            _active_worker_tasks.add(task)
+
+    if _active_worker_tasks:
+        try:
+            await asyncio.gather(*list(_active_worker_tasks), return_exceptions=True)
+        except Exception:
+            pass
+
+    if not download_mgr.queue:
         download_mgr.is_running = False
-        download_mgr.active_index = None
+        download_mgr.active_indices.clear()
         await manager.send_json({"type": "finish_all"})
         await manager.send_json({"type": "global_status", "state": "idle"})
-        
-        # Salvaguarda final por si quedó algún ID pendiente en este lote
+        await send_webhook_notification("Descargas Finalizadas", "Todas las descargas en cola han sido completadas.", "success")
+
         for did in db_ids:
             _pending_auto_downloads.discard(did)
         if _auto_download_total_queued > 0 and len(_pending_auto_downloads) == 0:
@@ -2706,6 +3390,7 @@ async def process_downloads(db_ids, custom_dir=""):
                 "duration": 10000,
                 "title": "Descargas Finalizadas"
             })
+
 
 
 @app.websocket("/ws")
