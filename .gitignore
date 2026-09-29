@@ -37,13 +37,9 @@ ENV/
 *.sublime-workspace
 .agents/
 
-# Android build outputs & local config
-**/build/
-**/.gradle/
-**/local.properties
-**/*.iml
-**/.cxx/
-**/captures/
+# Proyecto Android (código local, distribuido via Releases)
+app android/
+
 
 # Sistema operativo
 Thumbs.db
